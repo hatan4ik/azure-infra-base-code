@@ -1,0 +1,6 @@
+steps:
+- bash: |
+    curl -fsSL https://releases.hashicorp.com/terraform/$(TF_VERSION)/terraform_$(TF_VERSION)_linux_amd64.zip -o tf.zip
+    unzip -o tf.zip -d /usr/local/bin
+    terraform -version
+  displayName: Install Terraform

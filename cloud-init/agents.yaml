@@ -1,0 +1,4 @@
+#cloud-config
+package_update: true
+runcmd:
+  - echo 'bootstrapped agents' > /var/log/example.log

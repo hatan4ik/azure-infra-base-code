@@ -1,0 +1,102 @@
+# -----------------------------
+# OS / Editor noise
+# -----------------------------
+.DS_Store
+Thumbs.db
+Desktop.ini
+.Spotlight-V100
+.Trashes
+.idea/
+.vscode/
+*.code-workspace
+*.iml
+*.swp
+*.swo
+*.bak
+*.tmp
+
+# -----------------------------
+# Python / virtual environments
+# -----------------------------
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+.venv*/
+.tox/
+.coverage
+coverage.*
+coverage/
+reports/
+
+# -----------------------------
+# Node / JavaScript tooling
+# -----------------------------
+node_modules/
+.npm/
+.nyc_output/
+.pnpm-debug.log
+yarn-error.log
+dist/
+out/
+build/
+
+# -----------------------------
+# Terraform & infrastructure artifacts
+# -----------------------------
+.terraform/
+.terraform.tfstate.lock.info
+terraform.tfstate
+terraform.tfstate.*
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log
+*.tfvars
+!**/terraform.tfvars
+*.tfvars.json
+*.tfvars.local
+*.tfvars.backup
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# -----------------------------
+# Azure / DevOps CLI caches
+# -----------------------------
+.azure/
+.azdevops/
+.azuredevops/
+.ado/
+.scannerwork/
+
+# -----------------------------
+# Trunk CLI generated content
+# -----------------------------
+.trunk/*
+!.trunk/trunk.yaml
+
+# -----------------------------
+# Archives & installers
+# -----------------------------
+*.zip
+*.tgz
+*.tar.gz
+*.tar
+*.gz
+
+# -----------------------------
+# Misc tooling
+# -----------------------------
+.env
+.env.*
+.direnv/
+logs/
+*.log
+tmp/

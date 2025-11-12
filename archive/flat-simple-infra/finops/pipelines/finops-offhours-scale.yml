@@ -1,0 +1,37 @@
+# Fallback to scale VMSS via pipeline (if Logic Apps not desired)
+trigger: none
+
+parameters:
+  - name: action
+    displayName: Scale Action
+    type: string
+    default: 'down'
+    values: [ 'down', 'up' ]
+  - name: capacity
+    displayName: Capacity when scaling up
+    type: number
+    default: 1
+
+pool:
+  name: self-hosted-linux
+
+variables:
+  AZ_SUBSCRIPTION: 'My-ARM-Connection-OIDC'
+  RG: 'rg-code-runner'
+  VMSS: 'vmss-agents'
+
+steps:
+  - task: AzureCLI@2
+    displayName: Scale VMSS
+    inputs:
+      azureSubscription: $(AZ_SUBSCRIPTION)
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        if [ "${{ parameters.action }}" = "down" ]; then
+          echo "Scaling $(VMSS) to 0"
+          az vmss scale -g $(RG) -n $(VMSS) --new-capacity 0
+        else
+          echo "Scaling $(VMSS) to ${{ parameters.capacity }}"
+          az vmss scale -g $(RG) -n $(VMSS) --new-capacity ${{ parameters.capacity }}
+        fi

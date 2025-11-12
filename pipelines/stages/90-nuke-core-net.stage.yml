@@ -1,0 +1,27 @@
+parameters:
+  environmentName: ''
+  serviceConnection: ''
+  variableGroups: []
+
+stages:
+- stage: NukeCoreNet
+  displayName: "NUKE core network RG (danger)"
+  variables:
+  - ${{ each g in parameters.variableGroups }}:
+    - group: ${{ g }}
+  jobs:
+  - deployment: Nuke
+    displayName: "Delete RG $(NET_RG)"
+    environment: ${{ parameters.environmentName }}
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - checkout: self
+          - task: AzureCLI@2
+            displayName: 'Delete RG (idempotent)'
+            inputs:
+              azureSubscription: ${{ parameters.serviceConnection }}
+              scriptType: bash
+              scriptLocation: scriptPath
+              scriptPath: scripts/nuke_core_net.sh

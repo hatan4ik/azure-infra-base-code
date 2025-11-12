@@ -1,0 +1,26 @@
+# pipelines/steps/prepare-scripts.step.yml
+parameters:
+  scriptsDir: ''
+
+steps:
+  - checkout: self
+    persistCredentials: true
+    clean: false
+
+  - bash: |
+      set -euxo pipefail
+      test -d "${SCRIPTS_DIR}"
+
+      # Normalize CRLF and ensure executables on Linux agent
+      if ! command -v dos2unix >/dev/null 2>&1; then
+        sudo apt-get update -y
+        sudo apt-get install -y dos2unix
+      fi
+
+      find "${SCRIPTS_DIR}" -type f -name "*.sh" -print0 | xargs -0 dos2unix -q || true
+      find "${SCRIPTS_DIR}" -type f -name "*.sh" -print0 | xargs -0 chmod +x
+
+      echo "Prepared scripts in ${SCRIPTS_DIR}"
+    env:
+      SCRIPTS_DIR: ${{ parameters.scriptsDir }}
+    displayName: "Prep scripts (CRLF→LF + chmod)"

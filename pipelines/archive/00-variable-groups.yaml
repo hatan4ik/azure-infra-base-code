@@ -1,0 +1,78 @@
+# Run once. Requires: Project settings → Pipelines → "Allow scripts to access the OAuth token"
+# Also ensure the project Build Service has permission to manage Library variable groups.
+
+trigger: none
+pr: none
+pool: { vmImage: ubuntu-latest }
+
+stages:
+- stage: VarGroups
+  jobs:
+  - job: CreateOrUpdateVGs
+    steps:
+    - bash: |
+        set -euo pipefail
+        if [[ -z "${SYSTEM_ACCESSTOKEN:-}" ]]; then
+          echo "ERROR: System.AccessToken is empty. Enable 'Allow scripts to access the OAuth token' in this pipeline's settings." >&2
+          exit 1
+        fi
+        which jq >/dev/null 2>&1 || sudo apt-get update && sudo apt-get install -y jq
+
+        orgUrl="$(echo "$(System.CollectionUri)" | sed 's:/*$::')"
+        project="$(System.TeamProject)"
+        api="${orgUrl}/${project}/_apis/distributedtask/variablegroups?api-version=7.1-preview.2"
+        authHeader="Authorization: Bearer $(System.AccessToken)"
+        json() { jq -c .; }
+
+        upsert_vg () {
+          local name="$1"; local payload="$2"
+
+          # Lookup by name
+          set +e
+          res="$(curl -sS -H "$authHeader" "$api&groupName=$(printf %s "$name" | jq -sRr @uri)")"
+          set -e
+          id="$(echo "$res" | jq -r '.value[0].id // empty')"
+
+          if [[ -n "$id" ]]; then
+            echo "Updating variable group '$name' (id=$id)"
+            curl -sS -X PUT -H "$authHeader" -H 'Content-Type: application/json' \
+              "${orgUrl}/${project}/_apis/distributedtask/variablegroups/${id}?api-version=7.1-preview.2" \
+              --data-raw "$payload" >/dev/null
+          else
+            echo "Creating variable group '$name'"
+            curl -sS -X POST -H "$authHeader" -H 'Content-Type: application/json' \
+              "$api" --data-raw "$payload" >/dev/null
+          fi
+          echo "✓ $name"
+        }
+
+        # Plain group (for core naming/tags/etc.)
+        upsert_vg "vg-core-bootstrap" "$(cat <<'JSON' | json
+        {
+          "type": "Vsts",
+          "name": "vg-core-bootstrap",
+          "variables": {
+            "LOCATION":          { "value": "eastus" },
+            "STATE_RG":          { "value": "rg-example-tfstate" },
+            "STATE_SA":          { "value": "stexampletfstate" },
+            "STATE_CONTAINER":   { "value": "tfstate" },
+            "KV_NAME":           { "value": "kv-example-platform" },
+            "LAW_NAME":          { "value": "law-example-platform" },
+            "ACR_NAME":          { "value": "acrexampleplatform" },
+
+            "TAG_BusinessUnit":  { "value": "core" },
+            "TAG_Environment":   { "value": "prod" },
+            "TAG_Owner":         { "value": "platform-team" },
+            "TAG_System":        { "value": "example-platform" },
+            "TAG_Project":       { "value": "example" },
+            "TAG_Lifecycle":     { "value": "long-lived" },
+            "TAG_Contact":       { "value": "devops@example.com" }
+          }
+        }
+        JSON
+        )"
+
+        echo "Done."
+      displayName: "Upsert variable groups"
+      env:
+        SYSTEM_ACCESSTOKEN: $(System.AccessToken)

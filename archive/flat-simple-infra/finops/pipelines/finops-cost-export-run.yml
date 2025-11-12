@@ -1,0 +1,21 @@
+# Manually trigger Cost Management Export run (in addition to daily schedule)
+trigger: none
+
+pool:
+  name: self-hosted-linux
+
+variables:
+  AZ_SUBSCRIPTION: 'My-ARM-Connection-OIDC'
+  SUBSCRIPTION_ID: '00000000-0000-0000-0000-000000000000'
+  EXPORT_NAME: 'cost-export-daily'
+
+steps:
+  - task: AzureCLI@2
+    displayName: "Run cost export now"
+    inputs:
+      azureSubscription: $(AZ_SUBSCRIPTION)
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        az costmanagement export run           --name $(EXPORT_NAME)           --scope /subscriptions/$(SUBSCRIPTION_ID)
+        echo "Export triggered"

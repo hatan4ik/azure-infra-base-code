@@ -1,0 +1,9 @@
+variables:
+  ORG: 'example'
+  DEFAULT_LOCATION: 'westeurope'
+  ARM_CONNECTION: 'My-ARM-Connection-OIDC'
+  TF_VERSION: '1.9.5'
+  TFSTATE_RG: 'rg-example-tfstate'
+  TFSTATE_SA: 'stexampletfstate'
+  TFSTATE_CONTAINER: 'tfstate'
+  SIGN_WITH_COSIGN: 'false'   # flip to true to run signing stage

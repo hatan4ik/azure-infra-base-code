@@ -1,0 +1,10 @@
+# pipelines/templates/vars.core.yaml
+# No triggers/pools here. Just variable-group attachments so all stages see them.
+
+variables:
+- group: vg-core-bootstrap        # OIDC_SERVICE_CONNECTION, global LOCATION, tags, ACR/KV/LAW names, etc.
+- group: vg-core-network          # VNET_CIDR, SNET_* names, DNS zone names, toggles for shared PEs
+- group: vg-kv-backend            # (optional) KV link settings or names
+- group: vg-tags                  # BusinessUnit/Environment/Owner/System/Project/Lifecycle/Contact
+# - group: vg-powerbi-gateway     # (optional) Power BI VNet gateway configuration
+# - group: vg-customers           # (optional) if you later want per-customer vars from VGs

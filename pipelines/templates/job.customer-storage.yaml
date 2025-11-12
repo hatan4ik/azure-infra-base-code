@@ -1,0 +1,144 @@
+# pipelines/templates/job.customer-storage.yaml
+# Job template: ensure one customer's Storage + containers + diagnostics + MI RBAC + optional PEs
+
+parameters:
+- name: slug
+  type: string
+- name: location
+  type: string
+- name: containers
+  type: string
+- name: enableStoragePE
+  type: boolean
+  default: true
+
+jobs:
+- job: 'cust_${{ parameters.slug }}'
+  displayName: "Customer '${{ parameters.slug }}' storage"
+  pool:
+    vmImage: ubuntu-latest
+  steps:
+  - task: AzureCLI@2
+    displayName: "Ensure SA + containers + diagnostics + RBAC + (PE)"
+    inputs:
+      azureSubscription: '$(OIDC_SERVICE_CONNECTION)'
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+
+        slug='${{ parameters.slug }}'
+        location='${{ parameters.location }}'
+        containers='${{ parameters.containers }}'
+        enablePE='${{ parameters.enableStoragePE }}'
+
+        dataRg="rg-example-data-${slug}"
+
+        # ---------- Tags ----------
+        declare -a TAGS=()
+        TAGS+=("BusinessUnit=$(TAG_BusinessUnit)")
+        TAGS+=("Environment=$(TAG_Environment)")
+        TAGS+=("Owner=$(TAG_Owner)")
+        TAGS+=("CostCenter=$(TAG_CostCenter)")
+        TAGS+=("System=$(TAG_System)")
+        TAGS+=("Project=$(TAG_Project)")
+        TAGS+=("Lifecycle=$(TAG_Lifecycle)")
+        TAGS+=("Contact=$(TAG_Contact)")
+        tag_merge(){ local rid="$1"; shift; az resource tag --ids "$rid" --is-incremental --only-show-errors --tags "$@" >/dev/null; }
+
+        subId="$(az account show --query id -o tsv)"
+
+        # RG
+        az group show -n "$dataRg" >/dev/null 2>&1 || az group create -n "$dataRg" -l "$location" --tags "${TAGS[@]}" -o none
+        tag_merge "/subscriptions/${subId}/resourceGroups/${dataRg}" "${TAGS[@]}"
+
+        # SA name (stable if exists)
+        prefix="st${slug}"
+        existing="$(az storage account list -g "$dataRg" --query "[?starts_with(name, '${prefix}')].name | [0]" -o tsv)"
+        if [[ -n "$existing" ]]; then sa="$existing"; else suf="$(tr -dc 'a-f0-9' </dev/urandom | head -c6)"; sa="${prefix}${suf}"; sa="${sa:0:24}"; fi
+        echo "   - Using SA: $sa"
+
+        # SA (ADLS Gen2)
+        if ! az storage account show -g "$dataRg" -n "$sa" >/dev/null 2>&1; then
+          az storage account create -g "$dataRg" -n "$sa" -l "$location" \
+            --sku Standard_LRS --kind StorageV2 --hns true \
+            --min-tls-version TLS1_2 --https-only true --allow-blob-public-access false \
+            --tags "${TAGS[@]}" -o none
+        else
+          saId="$(az storage account show -g "$dataRg" -n "$sa" --query id -o tsv)"
+          tag_merge "$saId" "${TAGS[@]}"
+        fi
+
+        saId="$(az storage account show -g "$dataRg" -n "$sa" --query id -o tsv)"
+        hns="$(az storage account show -g "$dataRg" -n "$sa" --query isHnsEnabled -o tsv)"
+
+        # Containers
+        IFS=',' read -r -a CONTS <<< "$containers"
+        for c in "${CONTS[@]}"; do
+          name="$(echo "$c" | xargs)"; [[ -z "$name" ]] && continue
+          az storage container create --name "$name" --account-name "$sa" --auth-mode login --public-access off -o none >/dev/null
+        done
+
+        # Diagnostics -> LAW (if present)
+        if [[ -n "$(LAW_NAME)" ]]; then
+          LAW_ID="$(az monitor log-analytics workspace show -g "$(STATE_RG)" -n "$(LAW_NAME)" --query id -o tsv 2>/dev/null || true)"
+          if [[ -n "$LAW_ID" ]]; then
+            cats="$(az monitor diagnostic-settings categories list --resource "$saId" 2>/dev/null || echo '{}')"
+            logs="[]"; metrics="[]"
+            echo "$cats" | jq -e '.value[] | select(.type=="Log" and .name=="AuditEvent")' >/dev/null 2>&1 && logs='[{"category":"AuditEvent","enabled":true}]'
+            echo "$cats" | jq -e '.value[] | select(.type=="Metric" and .name=="AllMetrics")' >/dev/null 2>&1 && metrics='[{"category":"AllMetrics","enabled":true}]'
+            az monitor diagnostic-settings list --resource "$saId" -o tsv --query "value[?name=='ds-sa'].name" | grep -q . && \
+              az monitor diagnostic-settings update --name ds-sa --resource "$saId" --workspace "$LAW_ID" --logs "$logs" --metrics "$metrics" >/dev/null || \
+              az monitor diagnostic-settings create --name ds-sa --resource "$saId" --workspace "$LAW_ID" --logs "$logs" --metrics "$metrics" >/dev/null 2>&1 || \
+              az monitor diagnostic-settings create --name ds-sa --resource "$saId" --workspace "$LAW_ID" --logs "$logs" --metrics "$metrics" >/dev/null
+          fi
+        fi
+
+        # HNS-aware hardening
+        if [[ "$hns" == "true" ]]; then
+          az storage account blob-service-properties update -g "$dataRg" -n "$sa" --enable-delete-retention true --delete-retention-days 30 -o none
+        else
+          az storage account blob-service-properties update -g "$dataRg" -n "$sa" \
+            --enable-delete-retention true --delete-retention-days 30 \
+            --enable-versioning true --enable-container-delete-retention true --container-delete-retention-days 7 -o none
+        fi
+
+        # RBAC to MI
+        MI_PID="$(az identity show -g "$(MI_RESOURCE_GROUP)" -n "$(MI_NAME)" --query principalId -o tsv 2>/dev/null || true)"
+        if [[ -n "$MI_PID" ]]; then
+          az role assignment list --assignee-object-id "$MI_PID" --scope "$saId" --query "[?roleDefinitionName=='Storage Blob Data Contributor']|[0]" -o tsv | grep -q . || \
+            az role assignment create --assignee-object-id "$MI_PID" --role "Storage Blob Data Contributor" --scope "$saId" -o none 2>/dev/null || \
+            echo "   ! Could not grant 'Storage Blob Data Contributor' at $saId (need UA/Owner)."
+        fi
+
+        # Optional Private Endpoints (create **two** PEs for blob and dfs if HNS=true)
+        if [[ "$enablePE" == "true" ]]; then
+          SUBNET_ID="/subscriptions/${subId}/resourceGroups/$(NET_RG)/providers/Microsoft.Network/virtualNetworks/$(VNET_NAME)/subnets/$(SNET_PE_NAME)"
+          ZONE_BLOB_ID="/subscriptions/${subId}/resourceGroups/$(NET_RG)/providers/Microsoft.Network/privateDnsZones/$(Z_BLOB)"
+          ZONE_DFS_ID="/subscriptions/${subId}/resourceGroups/$(NET_RG)/providers/Microsoft.Network/privateDnsZones/$(Z_DFS)"
+
+          # blob PE
+          PE_BLOB="pe-${sa}-blob"
+          az network private-endpoint show -g "$dataRg" -n "$PE_BLOB" >/dev/null 2>&1 || \
+            az network private-endpoint create -g "$dataRg" -n "$PE_BLOB" -l "$location" \
+              --subnet "$SUBNET_ID" --private-connection-resource-id "$saId" \
+              --group-ids blob --connection-name "conn-${sa}-blob" --tags "${TAGS[@]}" -o none
+          az network private-endpoint dns-zone-group show -g "$dataRg" --endpoint-name "$PE_BLOB" -n "dzg-${sa}-blob" >/dev/null 2>&1 || \
+            az network private-endpoint dns-zone-group create -g "$dataRg" --endpoint-name "$PE_BLOB" -n "dzg-${sa}-blob" --private-dns-zone "$ZONE_BLOB_ID" -o none
+
+          if [[ "$hns" == "true" ]]; then
+            # dfs PE (separate, avoids "OnlyOneGroupIdPermitted")
+            PE_DFS="pe-${sa}-dfs"
+            az network private-endpoint show -g "$dataRg" -n "$PE_DFS" >/dev/null 2>&1 || \
+              az network private-endpoint create -g "$dataRg" -n "$PE_DFS" -l "$location" \
+                --subnet "$SUBNET_ID" --private-connection-resource-id "$saId" \
+                --group-ids dfs --connection-name "conn-${sa}-dfs" --tags "${TAGS[@]}" -o none
+            az network private-endpoint dns-zone-group show -g "$dataRg" --endpoint-name "$PE_DFS" -n "dzg-${sa}-dfs" >/dev/null 2>&1 || \
+              az network private-endpoint dns-zone-group create -g "$dataRg" --endpoint-name "$PE_DFS" -n "dzg-${sa}-dfs" --private-dns-zone "$ZONE_DFS_ID" -o none
+          fi
+        fi
+
+        # Verification
+        echo ">> Verification: $slug"
+        echo "   SA: $sa (RG=$dataRg, HNS=$hns)"
+        az storage container list --account-name "$sa" --auth-mode login --query "[].name" -o tsv | sed 's/^/     - /' || true

@@ -1,0 +1,31 @@
+parameters:
+  environmentName: "env-infra-bootstrap"
+
+stages:
+- stage: Bootstrap
+  displayName: "01 — Bootstrap (RG/TF, KV, LAW, ACR)"
+  variables:
+    - group: vg-core-tags
+    - group: vg-core-platform
+    - group: vg-core-bootstrap
+  jobs:
+  - deployment: BootstrapInfra
+    environment: ${{ parameters.environmentName }}
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - checkout: self
+          - task: AzureCLI@2
+            displayName: "Bootstrap"
+            inputs:
+              azureSubscription: 'My-ARM-Connection-OIDC'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                # >>> Paste the *body* of your working 01-bootstrap.yaml here (no triggers/pool).
+                # It already merges tags, hardens KV, creates LAW & ACR, and best-effort RBAC.
+                # It should read variables via $(VARIABLE) names from the VGs.
+                set -euo pipefail
+                echo "Using LOCATION=$(LOCATION) STATE_RG=$(STATE_RG) ACR=$(ACR_NAME) ..."
+                # ... your existing bootstrap inline script ...

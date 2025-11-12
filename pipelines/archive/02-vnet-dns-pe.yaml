@@ -1,0 +1,75 @@
+# Stage template: VNet + subnets + Private DNS zones + optional PEs for shared KV/ACR
+
+parameters:
+  - name: oidcServiceConnection
+    type: string
+    default: My-ARM-Connection-OIDC
+  - name: net
+    type: object
+    default:
+      location: eastus
+      netRG: rg-example-core-net
+      vnetName: vnet-example-core
+      vnetCidr: 10.10.0.0/16
+      workloadsSubnet: { name: snet-workloads,          cidr: 10.10.0.0/24 }
+      peSubnet:        { name: snet-private-endpoints,  cidr: 10.10.1.0/24 }
+      dnsZones:
+        blob: privatelink.blob.core.windows.net
+        dfs:  privatelink.dfs.core.windows.net
+        kv:   privatelink.vaultcore.azure.net
+        acr:  privatelink.azurecr.io
+      enableKVPE: false
+      enableACRPE: false
+      kv:  { rg: rg-example-tfstate, name: kv-example-platform }
+      acr: { rg: rg-example-tfstate, name: acrexampleplatform }
+      tags:
+        BusinessUnit: core
+        Environment:  prod
+        Owner:        platform-team
+        System:       example-platform
+        Project:      example
+        Lifecycle:    long-lived
+        Contact:      devops@example.com
+  - name: enableDebug
+    type: boolean
+    default: false
+
+stage: Network_Core
+jobs:
+- job: BuildCoreNet
+  displayName: Ensure RG, VNet/Subnets, Private DNS + optional PEs
+  variables:
+    LOCATION: ${{ parameters.net.location }}
+    NET_RG: ${{ parameters.net.netRG }}
+    VNET_NAME: ${{ parameters.net.vnetName }}
+    VNET_CIDR: ${{ parameters.net.vnetCidr }}
+    SNET_WORKLOADS_NAME: ${{ parameters.net.workloadsSubnet.name }}
+    SNET_WORKLOADS_CIDR: ${{ parameters.net.workloadsSubnet.cidr }}
+    SNET_PE_NAME: ${{ parameters.net.peSubnet.name }}
+    SNET_PE_CIDR: ${{ parameters.net.peSubnet.cidr }}
+    Z_BLOB: ${{ parameters.net.dnsZones.blob }}
+    Z_DFS:  ${{ parameters.net.dnsZones.dfs }}
+    Z_KV:   ${{ parameters.net.dnsZones.kv }}
+    Z_ACR:  ${{ parameters.net.dnsZones.acr }}
+    ENABLE_PE_KV:  ${{ parameters.net.enableKVPE }}
+    ENABLE_PE_ACR: ${{ parameters.net.enableACRPE }}
+    KV_RG:  ${{ parameters.net.kv.rg }}
+    KV_NAME: ${{ parameters.net.kv.name }}
+    ACR_RG:  ${{ parameters.net.acr.rg }}
+    ACR_NAME: ${{ parameters.net.acr.name }}
+    TAG_BusinessUnit: ${{ parameters.net.tags.BusinessUnit }}
+    TAG_Environment:  ${{ parameters.net.tags.Environment }}
+    TAG_Owner:        ${{ parameters.net.tags.Owner }}
+    TAG_System:       ${{ parameters.net.tags.System }}
+    TAG_Project:      ${{ parameters.net.tags.Project }}
+    TAG_Lifecycle:    ${{ parameters.net.tags.Lifecycle }}
+    TAG_Contact:      ${{ parameters.net.tags.Contact }}
+    DEBUG: ${{ parameters.enableDebug }}
+  steps:
+  - task: AzureCLI@2
+    displayName: "Provision core networking"
+    inputs:
+      azureSubscription: '${{ parameters.oidcServiceConnection }}'
+      scriptType: 'bash'
+      scriptLocation: 'scriptPath'
+      scriptPath: 'pipelines/scripts/provision-core-net.sh'

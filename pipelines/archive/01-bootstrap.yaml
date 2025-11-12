@@ -1,0 +1,71 @@
+# Stage template: Core RG/TF-state/KV (hardened)/LAW + diag/ACR (SKU safety) + MI RBAC
+# No trigger/variables at top-level (template-safe)
+
+parameters:
+  - name: oidcServiceConnection
+    type: string
+    default: My-ARM-Connection-OIDC
+  - name: core
+    type: object
+    default:
+      location: eastus
+      rg: rg-example-tfstate
+      sa: stexampletfstate
+      container: tfstate
+      kvName: kv-example-platform
+      kvPublicNetworkAccess: Disabled
+      kvRetentionDays: 30
+      lawName: law-example-platform
+      acrName: acrexampleplatform
+      acrSku: Premium
+      acrPublicNetworkEnabled: false
+      mi:
+        rg: rg-ado-wif
+        name: ado-wif-mi
+      tags:
+        BusinessUnit: core
+        Environment:  prod
+        Owner:        platform-team
+        System:       example-platform
+        Project:      example
+        Lifecycle:    long-lived
+        Contact:      devops@example.com
+  - name: enableDebug
+    type: boolean
+    default: false
+
+stage: Bootstrap
+jobs:
+- job: BootstrapCore
+  displayName: Ensure baseline infra + tags + RBAC (idempotent)
+  variables:
+    LOCATION: ${{ parameters.core.location }}
+    STATE_RG: ${{ parameters.core.rg }}
+    STATE_SA: ${{ parameters.core.sa }}
+    STATE_CONTAINER: ${{ parameters.core.container }}
+    KV_NAME: ${{ parameters.core.kvName }}
+    KV_PUBLIC_NETWORK_ACCESS: ${{ parameters.core.kvPublicNetworkAccess }}
+    KV_RETENTION_DAYS: ${{ parameters.core.kvRetentionDays }}
+    LAW_NAME: ${{ parameters.core.lawName }}
+    ACR_NAME: ${{ parameters.core.acrName }}
+    ACR_SKU: ${{ parameters.core.acrSku }}
+    ACR_PUBLIC_NETWORK_ENABLED: ${{ parameters.core.acrPublicNetworkEnabled }}
+    MI_RG: ${{ parameters.core.mi.rg }}
+    MI_NAME: ${{ parameters.core.mi.name }}
+    TAG_BusinessUnit: ${{ parameters.core.tags.BusinessUnit }}
+    TAG_Environment:  ${{ parameters.core.tags.Environment }}
+    TAG_Owner:        ${{ parameters.core.tags.Owner }}
+    TAG_System:       ${{ parameters.core.tags.System }}
+    TAG_Project:      ${{ parameters.core.tags.Project }}
+    TAG_Lifecycle:    ${{ parameters.core.tags.Lifecycle }}
+    TAG_Contact:      ${{ parameters.core.tags.Contact }}
+    DEBUG: ${{ parameters.enableDebug }}
+
+  steps:
+  - task: AzureCLI@2
+    displayName: "Bootstrap core"
+    inputs:
+      azureSubscription: '${{ parameters.oidcServiceConnection }}'
+      scriptType: 'bash'
+      scriptLocation: 'scriptPath'
+      scriptPath: 'pipelines/scripts/bootstrap.sh'

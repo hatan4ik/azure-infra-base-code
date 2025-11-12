@@ -1,0 +1,33 @@
+# pipelines/stages/02-vnet-dns-pe.stage.yml
+parameters:
+  environmentName: ''
+  serviceConnection: ''
+  variableGroups: []
+  scriptsDir: ''
+
+stages:
+- stage: CoreNetwork
+  displayName: "02 • Core VNet + DNS (+ optional PEs)"
+  variables:
+  - ${{ each vg in parameters.variableGroups }}:
+    - group: ${{ vg }}
+
+  jobs:
+  - deployment: CoreNet
+    displayName: "Ensure VNet/Subnets, Private DNS, optional shared PEs"
+    environment: ${{ parameters.environmentName }}
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - checkout: self
+            clean: true
+          - task: AzureCLI@2
+            displayName: "Run vnet_dns_pe.sh"
+            inputs:
+              azureSubscription: ${{ parameters.serviceConnection }}
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -euo pipefail
+                bash "${{ parameters.scriptsDir }}/vnet_dns_pe.sh"

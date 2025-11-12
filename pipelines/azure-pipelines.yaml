@@ -1,0 +1,65 @@
+# azure-pipelines.yml
+# Orchestrator: creates VGs (optional), then bootstrap, core network, per-customer storage
+
+trigger:
+  branches:
+    include: [ main ]
+pr: none
+
+variables:
+  OIDC_SERVICE_CONNECTION: 'My-ARM-Connection-OIDC'
+  RUN_VARS_SETUP: 'false'   # set to 'true' only when you want to (re)create VGs
+  scriptsDir: '$(Build.SourcesDirectory)/scripts'
+  ENABLE_PBI_GATEWAY: 'true'
+  PBI_RG: 'rg-example-analytics'
+  PBI_LOCATION: 'eastus'
+  PBI_GATEWAY_NAME: 'example-powerbi-gateway'
+  PBI_VNET_RG: 'rg-example-core-net'
+  PBI_VNET_NAME: 'vnet-example-core'
+  PBI_SUBNET_NAME: 'snet-powerbi-gateway'
+  PBI_SUBNET_CIDR: '10.10.3.0/27'
+  PBI_DELEGATION: 'Microsoft.PowerPlatform/vnetaccesslinks'
+  PBI_GATEWAY_API_VERSION: '2020-10-30-preview'
+  PBI_ENVIRONMENT_IDS: '/providers/Microsoft.PowerPlatform/locations/Na/environments/Default-00000000-0000-0000-0000-000000000000'
+
+stages:
+# 0) Variable Groups (optional one-time)
+- ${{ if eq(variables.RUN_VARS_SETUP, 'true') }}:
+  - template: stages/00-var-groups.stage.yml
+    parameters:
+      environmentName: 'env-vg-setup'
+      serviceConnection: '$(OIDC_SERVICE_CONNECTION)'
+      scriptsDir: '$(scriptsDir)'
+
+# 1) Bootstrap (RG, tfstate SA/container, KV hardened, LAW+diag, ACR, MI RBAC)
+- template: stages/01-bootstrap.stage.yml
+  parameters:
+    environmentName: 'env-infra-bootstrap'
+    serviceConnection: '$(OIDC_SERVICE_CONNECTION)'
+    variableGroups:
+      - 'vg-core-bootstrap'
+    scriptsDir: '$(scriptsDir)'
+
+# 2) Core VNet + Private DNS + (optional) shared-service PEs (KV/ACR)
+- template: stages/02-vnet-dns-pe.stage.yml
+  parameters:
+    environmentName: 'env-core-network'
+    serviceConnection: '$(OIDC_SERVICE_CONNECTION)'
+    variableGroups:
+      - 'vg-core-network'
+    scriptsDir: '$(scriptsDir)'
+
+# 3) Per-customer ADLS Gen2 + containers + diag + MI RBAC + PE into core VNet
+- template: stages/03-customer-storage.stage.yml
+  parameters:
+    environmentName: 'env-customer-storage'
+    serviceConnection: '$(OIDC_SERVICE_CONNECTION)'
+    variableGroups:
+      - 'vg-customer-washington'
+    scriptsDir: '$(scriptsDir)'
+
+# 4) Power BI VNet gateway (optional - controlled via ENABLE_PBI_GATEWAY)
+- template: stages/04-powerbi-gateway.stage.yml
+  parameters:
+    serviceConnection: '$(OIDC_SERVICE_CONNECTION)'
+    scriptsDir: '$(scriptsDir)'

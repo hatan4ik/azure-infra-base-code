@@ -1,0 +1,31 @@
+parameters:
+  environmentName: "env-customer-storage"
+  vgCustomerGroup: "vg-customer-washington"
+
+stages:
+- stage: CustomerStorage
+  displayName: "03 — Per-customer Storage"
+  variables:
+    - group: vg-core-tags
+    - group: vg-core-platform
+    - group: ${{ parameters.vgCustomerGroup }}
+  jobs:
+  - deployment: CustomerSA
+    environment: ${{ parameters.environmentName }}
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - checkout: self
+          - task: AzureCLI@2
+            displayName: "Ensure per-customer ADLS + containers + diag + RBAC + PE"
+            inputs:
+              azureSubscription: 'My-ARM-Connection-OIDC'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                # >>> Paste the *body* of your fixed customer storage pipeline here.
+                # IMPORTANT: keep separate PEs for blob/dfs when HNS=true (you fixed that).
+                set -euo pipefail
+                echo "Customer=$(CUSTOMER_SLUG) RG=$(DATA_RG) LAW=$(LAW_NAME)"
+                # ... your existing customer storage inline script ...

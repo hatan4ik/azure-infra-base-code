@@ -1,0 +1,55 @@
+{
+  "definition": {
+    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2019-05-01/workflowdefinition.json#",
+    "actions": {
+      "Scale_VMSS_to_0": {
+        "type": "Http",
+        "kind": "Http",
+        "inputs": {
+          "method": "PATCH",
+          "uri": "https://management.azure.com/subscriptions/@{parameters('subscriptionId')}/resourceGroups/@{parameters('resourceGroup')}/providers/Microsoft.Compute/virtualMachineScaleSets/@{parameters('vmssName')}?api-version=2023-09-01",
+          "body": {
+            "sku": {
+              "capacity": 0
+            }
+          },
+          "authentication": {
+            "type": "ManagedServiceIdentity"
+          }
+        },
+        "runAfter": {}
+      }
+    },
+    "contentVersion": "1.0.0.0",
+    "outputs": {},
+    "parameters": {
+      "subscriptionId": {
+        "type": "string"
+      },
+      "resourceGroup": {
+        "type": "string"
+      },
+      "vmssName": {
+        "type": "string"
+      }
+    },
+    "triggers": {
+      "Every_day_20_00": {
+        "type": "Recurrence",
+        "recurrence": {
+          "frequency": "Day",
+          "interval": 1,
+          "schedule": {
+            "hours": [
+              "20"
+            ],
+            "minutes": [
+              "0"
+            ]
+          },
+          "timeZone": "Asia/Jerusalem"
+        }
+      }
+    }
+  }
+}

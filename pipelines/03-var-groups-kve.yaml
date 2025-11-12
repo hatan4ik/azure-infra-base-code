@@ -1,0 +1,351 @@
+# 03-var-groups.yaml
+# Creates/updates these ADO Variable Groups (idempotent):
+#   - vg-core-bootstrap       (classic)
+#   - vg-core-network         (classic)
+#   - vg-customer-washington  (classic)
+#   - vg-powerbi-gateway      (classic)
+#   - vg-kv-backend           (Key Vault–backed)
+#
+# IMPORTANT: In the pipeline UI, enable:
+#   Project Settings → Pipelines → [this pipeline] → "Allow scripts to access the OAuth token"
+
+variables:
+  ORG_URL: 'https://dev.azure.com/ExampleCorpOps'
+  PROJECT: 'ExampleCorp'
+
+  # Service connection (WIF to MI) to use in the KV-backed VG
+  KV_SC_NAME: 'My-ARM-Connection-OIDC'
+
+  # Key Vault wiring for KV-backed VG
+  KV_NAME: 'kv-example-platform'
+  KV_SECRET_NAMES: 'wgcc-beanworks-username,wgcc-beanworks-password,SITE_URL,AZURE_STORAGE_CONNECTION_STRING,AZURE_CONTAINER_NAME'
+
+  # ---------- Seeds for vg-core-bootstrap ----------
+  B_LOCATION: 'eastus'
+  B_STATE_RG: 'rg-example-tfstate'
+  B_STATE_SA: 'stexampletfstate'
+  B_STATE_CONTAINER: 'tfstate'
+  B_KV_NAME: 'kv-example-platform'
+  B_KV_RETENTION_DAYS: '30'
+  B_KV_PUBLIC_NETWORK_ACCESS: 'Disabled'
+  B_LAW_NAME: 'law-example-platform'
+  B_LAW_SKU: 'PerGB2018'
+  B_ACR_NAME: 'acrexampleplatform'
+  B_ACR_SKU: 'Premium'
+  B_ACR_PUBLIC_NETWORK_ENABLED: 'false'
+  B_MI_RG: 'rg-ado-wif'
+  B_MI_NAME: 'ado-wif-mi'
+  B_TAG_BusinessUnit: 'core'
+  B_TAG_Environment: 'prod'
+  B_TAG_Owner: 'platform-team'
+  B_TAG_System: 'example-platform'
+  B_TAG_Project: 'example'
+  B_TAG_Lifecycle: 'long-lived'
+  B_TAG_Contact: 'devops@example.com'
+
+  # ---------- Seeds for vg-core-network ----------
+  N_NET_RG: 'rg-example-core-net'
+  N_VNET_NAME: 'vnet-example-core'
+  N_VNET_CIDR: '10.10.0.0/16'
+  N_SNET_WORKLOADS_NAME: 'snet-workloads'
+  N_SNET_WORKLOADS_CIDR: '10.10.0.0/24'
+  N_SNET_PE_NAME: 'snet-private-endpoints'
+  N_SNET_PE_CIDR: '10.10.1.0/24'
+  N_Z_BLOB: 'privatelink.blob.core.windows.net'
+  N_Z_DFS:  'privatelink.dfs.core.windows.net'
+  N_Z_KV:   'privatelink.vaultcore.azure.net'
+  N_Z_ACR:  'privatelink.azurecr.io'
+  N_ENABLE_PE_KV: 'false'
+  N_ENABLE_PE_ACR: 'false'
+  N_KV_RG: 'rg-example-tfstate'
+  N_KV_NAME: 'kv-example-platform'
+  N_ACR_RG: 'rg-example-tfstate'
+  N_ACR_NAME: 'acrexampleplatform'
+
+  # ---------- Seeds for vg-customer-washington ----------
+  C_CUSTOMER_SLUG: 'washington'
+  C_DATA_RG: 'rg-example-data-washington'
+  C_SA_NAME: ''
+  C_CONTAINERS_CSV: 'invoices,archive'
+  C_LOCATION: 'eastus'
+  C_LAW_RG: 'rg-example-tfstate'
+  C_LAW_NAME: 'law-example-platform'
+  C_MI_RG: 'rg-ado-wif'
+  C_MI_NAME: 'ado-wif-mi'
+  C_ENABLE_STORAGE_PE: 'true'
+  C_NET_RG: 'rg-example-core-net'
+  C_VNET_NAME: 'vnet-example-core'
+  C_SNET_PE_NAME: 'snet-private-endpoints'
+  C_Z_BLOB: 'privatelink.blob.core.windows.net'
+  C_Z_DFS:  'privatelink.dfs.core.windows.net'
+  C_TAG_BusinessUnit: 'data'
+  C_TAG_Environment: 'prod'
+  C_TAG_Owner: 'platform-team'
+  C_TAG_CostCenter: 'cc-002'
+  C_TAG_System: 'example-data'
+  C_TAG_Project: 'example'
+  C_TAG_Lifecycle: 'long-lived'
+  C_TAG_Contact: 'devops@example.com'
+
+  # ---------- Seeds for vg-powerbi-gateway ----------
+  PBI_ENABLE: 'false'
+  PBI_RG: 'rg-example-analytics'
+  PBI_LOCATION: 'eastus'
+  PBI_GATEWAY_NAME: 'example-powerbi-gateway'
+  PBI_VNET_RG: 'rg-example-core-net'
+  PBI_VNET_NAME: 'vnet-example-core'
+  PBI_SUBNET_NAME: 'snet-powerbi-gateway'
+  PBI_SUBNET_CIDR: '10.10.3.0/27'
+  PBI_ENVIRONMENT_IDS: ''   # Comma-separated Power Platform environment resource IDs (e.g. /providers/Microsoft.PowerPlatform/locations/unitedstates/environments/Default-...)
+
+stages:
+- stage: VarGroups
+  displayName: "Create/Update Variable Groups"
+  jobs:
+  - job: Upsert
+    displayName: "Upsert classic + KV-backed variable groups"
+    steps:
+    - task: Bash@3
+      displayName: "Upsert variable groups via REST (safe quoting)"
+      env:
+        SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+      inputs:
+        targetType: inline
+        script: |
+          set -euo pipefail
+
+          # Preconditions
+          if [[ -z "${SYSTEM_ACCESSTOKEN:-}" ]]; then
+            echo "ERROR: System.AccessToken is empty."
+            echo "Fix: Enable 'Allow scripts to access the OAuth token' in this pipeline's settings."
+            exit 1
+          fi
+
+          ORG_URL="$(ORG_URL)"
+          PROJECT="$(PROJECT)"
+          API_VG="7.1-preview.2"
+          API_SE="7.1-preview.4"
+          AUTH_HDR="Authorization: Bearer ${SYSTEM_ACCESSTOKEN}"
+          CT_HDR="Content-Type: application/json"
+
+          echo "Org: ${ORG_URL}"
+          echo "Project: ${PROJECT}"
+
+          # Resolve project id
+          proj_json="$(curl -sS -f -H "$AUTH_HDR" -H "$CT_HDR" \
+            "${ORG_URL}/_apis/projects/${PROJECT}?api-version=7.1")"
+          proj_id="$(echo "$proj_json" | jq -r '.id')"
+
+          # Helpers -----------------------------------------------------------
+          upsert_classic() {
+            local name="$1" desc="$2" vars_file="$3"
+
+            # Find existing
+            list="$(curl -sS -f -H "$AUTH_HDR" -H "$CT_HDR" \
+              "${ORG_URL}/${PROJECT}/_apis/distributedtask/variablegroups?api-version=${API_VG}")"
+            vg_id="$(echo "$list" | jq -r --arg n "$name" '.value[] | select(.name==$n) | .id' | head -n1)"
+
+            body="$(jq -n \
+              --arg name "$name" \
+              --arg desc "$desc" \
+              --arg proj_id "$proj_id" \
+              --arg proj_name "$PROJECT" \
+              --argjson vars "$(cat "$vars_file")" '
+              {
+                type: "Vsts",
+                name: $name,
+                description: $desc,
+                authorized: true,
+                variables: $vars,
+                variableGroupProjectReferences: [
+                  {
+                    projectReference: { id: $proj_id, name: $proj_name },
+                    name: $name,
+                    description: $desc
+                  }
+                ]
+              }')"
+
+            if [[ -z "$vg_id" || "$vg_id" == "null" ]]; then
+              echo ">> Creating variable group '${name}'..."
+              curl -sS -f -X POST -H "$AUTH_HDR" -H "$CT_HDR" \
+                -d "$body" \
+                "${ORG_URL}/${PROJECT}/_apis/distributedtask/variablegroups?api-version=${API_VG}" >/dev/null
+              echo "✓ Created '${name}'."
+            else
+              echo ">> Updating variable group '${name}' (id: ${vg_id})..."
+              curl -sS -f -X PUT -H "$AUTH_HDR" -H "$CT_HDR" \
+                -d "$body" \
+                "${ORG_URL}/${PROJECT}/_apis/distributedtask/variablegroups/${vg_id}?api-version=${API_VG}" >/dev/null
+              echo "✓ Updated '${name}'."
+            fi
+          }
+
+          upsert_kv() {
+            local name="$1" kv_name="$2" sc_name="$3" secret_csv="$4"
+
+            # Resolve service connection id
+            se_list="$(curl -sS -f -H "$AUTH_HDR" -H "$CT_HDR" \
+              "${ORG_URL}/${PROJECT}/_apis/serviceendpoint/endpoints?api-version=${API_SE}")"
+            sc_id="$(echo "$se_list" | jq -r --arg n "$sc_name" \
+              '.value[] | select(.name==$n and (.type=="azurerm" or .type=="azureRM")) | .id' | head -n1)"
+            [[ -n "$sc_id" && "$sc_id" != "null" ]] || { echo "ERROR: Service connection '${sc_name}' not found."; exit 1; }
+
+            # Build secret variable map (names only, marked isSecret)
+            kv_vars_file="$(mktemp)"
+            jq -n --arg csv "$secret_csv" '
+              ($csv | split(",") | map(.|gsub("^\\s+|\\s+$";"")) | map(select(length>0))) as $names
+              | reduce $names[] as $n ({}; .[$n] = { "isSecret": true })
+            ' > "$kv_vars_file"
+
+            # Find existing group
+            list="$(curl -sS -f -H "$AUTH_HDR" -H "$CT_HDR" \
+              "${ORG_URL}/${PROJECT}/_apis/distributedtask/variablegroups?api-version=${API_VG}")"
+            vg_id="$(echo "$list" | jq -r --arg n "$name" '.value[] | select(.name==$n) | .id' | head -n1)"
+
+            body="$(jq -n \
+              --arg name "$name" \
+              --arg proj_id "$proj_id" \
+              --arg proj_name "$PROJECT" \
+              --arg sc_id "$sc_id" \
+              --arg kv "$kv_name" \
+              --argjson vars "$(cat "$kv_vars_file")" '
+              {
+                type: "AzureKeyVault",
+                name: $name,
+                description: "Key Vault-backed group (managed via pipeline).",
+                authorized: true,
+                variables: $vars,
+                providerData: { serviceEndpointId: $sc_id, vault: $kv },
+                variableGroupProjectReferences: [
+                  { projectReference: { id: $proj_id, name: $proj_name }, name: $name, description: "KV-backed" }
+                ]
+              }')"
+
+            if [[ -z "$vg_id" || "$vg_id" == "null" ]]; then
+              echo ">> Creating KV variable group '${name}'..."
+              curl -sS -f -X POST -H "$AUTH_HDR" -H "$CT_HDR" \
+                -d "$body" \
+                "${ORG_URL}/${PROJECT}/_apis/distributedtask/variablegroups?api-version=${API_VG}" >/dev/null
+              echo "✓ Created '${name}'."
+            else
+              echo ">> Updating KV variable group '${name}' (id: ${vg_id})..."
+              curl -sS -f -X PUT -H "$AUTH_HDR" -H "$CT_HDR" \
+                -d "$body" \
+                "${ORG_URL}/${PROJECT}/_apis/distributedtask/variablegroups/${vg_id}?api-version=${API_VG}" >/dev/null
+              echo "✓ Updated '${name}'."
+            fi
+          }
+
+          # Build JSON payload files safely (no brittle quoting) ----------------
+          mkvars() {
+            # $1 = tmp file, then we write a JSON object: {"K":{"value":"V","isSecret":false},...}
+            local out="$1"; shift
+            jq -n '
+              reduce inputs as $kv ({}; . + { ($kv.k): {value: $kv.v, isSecret: false} })
+            ' > "$out"
+          }
+
+          tmp_boot="$(mktemp)"; tmp_net="$(mktemp)"; tmp_cust="$(mktemp)"; tmp_pbi="$(mktemp)"
+
+          # vg-core-bootstrap map
+          {
+            echo '{"k":"LOCATION","v":"'"$(B_LOCATION)"'"}'
+            echo '{"k":"STATE_RG","v":"'"$(B_STATE_RG)"'"}'
+            echo '{"k":"STATE_SA","v":"'"$(B_STATE_SA)"'"}'
+            echo '{"k":"STATE_CONTAINER","v":"'"$(B_STATE_CONTAINER)"'"}'
+            echo '{"k":"KV_NAME","v":"'"$(B_KV_NAME)"'"}'
+            echo '{"k":"KV_RETENTION_DAYS","v":"'"$(B_KV_RETENTION_DAYS)"'"}'
+            echo '{"k":"KV_PUBLIC_NETWORK_ACCESS","v":"'"$(B_KV_PUBLIC_NETWORK_ACCESS)"'"}'
+            echo '{"k":"LAW_NAME","v":"'"$(B_LAW_NAME)"'"}'
+            echo '{"k":"LAW_SKU","v":"'"$(B_LAW_SKU)"'"}'
+            echo '{"k":"ACR_NAME","v":"'"$(B_ACR_NAME)"'"}'
+            echo '{"k":"ACR_SKU","v":"'"$(B_ACR_SKU)"'"}'
+            echo '{"k":"ACR_PUBLIC_NETWORK_ENABLED","v":"'"$(B_ACR_PUBLIC_NETWORK_ENABLED)"'"}'
+            echo '{"k":"MI_RESOURCE_GROUP","v":"'"$(B_MI_RG)"'"}'
+            echo '{"k":"MI_NAME","v":"'"$(B_MI_NAME)"'"}'
+            echo '{"k":"TAG_BusinessUnit","v":"'"$(B_TAG_BusinessUnit)"'"}'
+            echo '{"k":"TAG_Environment","v":"'"$(B_TAG_Environment)"'"}'
+            echo '{"k":"TAG_Owner","v":"'"$(B_TAG_Owner)"'"}'
+            echo '{"k":"TAG_System","v":"'"$(B_TAG_System)"'"}'
+            echo '{"k":"TAG_Project","v":"'"$(B_TAG_Project)"'"}'
+            echo '{"k":"TAG_Lifecycle","v":"'"$(B_TAG_Lifecycle)"'"}'
+            echo '{"k":"TAG_Contact","v":"'"$(B_TAG_Contact)"'"}'
+          } | mkvars "$tmp_boot"
+
+          # vg-core-network map
+          {
+            echo '{"k":"LOCATION","v":"'"$(B_LOCATION)"'"}'
+            echo '{"k":"NET_RG","v":"'"$(N_NET_RG)"'"}'
+            echo '{"k":"VNET_NAME","v":"'"$(N_VNET_NAME)"'"}'
+            echo '{"k":"VNET_CIDR","v":"'"$(N_VNET_CIDR)"'"}'
+            echo '{"k":"SNET_WORKLOADS_NAME","v":"'"$(N_SNET_WORKLOADS_NAME)"'"}'
+            echo '{"k":"SNET_WORKLOADS_CIDR","v":"'"$(N_SNET_WORKLOADS_CIDR)"'"}'
+            echo '{"k":"SNET_PE_NAME","v":"'"$(N_SNET_PE_NAME)"'"}'
+            echo '{"k":"SNET_PE_CIDR","v":"'"$(N_SNET_PE_CIDR)"'"}'
+            echo '{"k":"Z_BLOB","v":"'"$(N_Z_BLOB)"'"}'
+            echo '{"k":"Z_DFS","v":"'"$(N_Z_DFS)"'"}'
+            echo '{"k":"Z_KV","v":"'"$(N_Z_KV)"'"}'
+            echo '{"k":"Z_ACR","v":"'"$(N_Z_ACR)"'"}'
+            echo '{"k":"ENABLE_PE_KV","v":"'"$(N_ENABLE_PE_KV)"'"}'
+            echo '{"k":"ENABLE_PE_ACR","v":"'"$(N_ENABLE_PE_ACR)"'"}'
+            echo '{"k":"KV_RG","v":"'"$(N_KV_RG)"'"}'
+            echo '{"k":"KV_NAME","v":"'"$(N_KV_NAME)"'"}'
+            echo '{"k":"ACR_RG","v":"'"$(N_ACR_RG)"'"}'
+            echo '{"k":"ACR_NAME","v":"'"$(N_ACR_NAME)"'"}'
+          } | mkvars "$tmp_net"
+
+          # vg-customer-washington map
+          {
+            echo '{"k":"CUSTOMER_SLUG","v":"'"$(C_CUSTOMER_SLUG)"'"}'
+            echo '{"k":"DATA_RG","v":"'"$(C_DATA_RG)"'"}'
+            echo '{"k":"SA_NAME","v":"'"$(C_SA_NAME)"'"}'
+            echo '{"k":"CONTAINERS_CSV","v":"'"$(C_CONTAINERS_CSV)"'"}'
+            echo '{"k":"LOCATION","v":"'"$(C_LOCATION)"'"}'
+            echo '{"k":"LAW_RG","v":"'"$(C_LAW_RG)"'"}'
+            echo '{"k":"LAW_NAME","v":"'"$(C_LAW_NAME)"'"}'
+            echo '{"k":"MI_RESOURCE_GROUP","v":"'"$(C_MI_RG)"'"}'
+            echo '{"k":"MI_NAME","v":"'"$(C_MI_NAME)"'"}'
+            echo '{"k":"ENABLE_STORAGE_PE","v":"'"$(C_ENABLE_STORAGE_PE)"'"}'
+            echo '{"k":"NET_RG","v":"'"$(C_NET_RG)"'"}'
+            echo '{"k":"VNET_NAME","v":"'"$(C_VNET_NAME)"'"}'
+            echo '{"k":"SNET_PE_NAME","v":"'"$(C_SNET_PE_NAME)"'"}'
+            echo '{"k":"Z_BLOB","v":"'"$(C_Z_BLOB)"'"}'
+            echo '{"k":"Z_DFS","v":"'"$(C_Z_DFS)"'"}'
+            echo '{"k":"TAG_BusinessUnit","v":"'"$(C_TAG_BusinessUnit)"'"}'
+            echo '{"k":"TAG_Environment","v":"'"$(C_TAG_Environment)"'"}'
+            echo '{"k":"TAG_Owner","v":"'"$(C_TAG_Owner)"'"}'
+            echo '{"k":"TAG_CostCenter","v":"'"$(C_TAG_CostCenter)"'"}'
+            echo '{"k":"TAG_System","v":"'"$(C_TAG_System)"'"}'
+            echo '{"k":"TAG_Project","v":"'"$(C_TAG_Project)"'"}'
+            echo '{"k":"TAG_Lifecycle","v":"'"$(C_TAG_Lifecycle)"'"}'
+            echo '{"k":"TAG_Contact","v":"'"$(C_TAG_Contact)"'"}'
+          } | mkvars "$tmp_cust"
+
+          # vg-powerbi-gateway map
+          {
+            echo '{"k":"ENABLE_PBI_GATEWAY","v":"'"$(PBI_ENABLE)"'"}'
+            echo '{"k":"PBI_RG","v":"'"$(PBI_RG)"'"}'
+            echo '{"k":"PBI_LOCATION","v":"'"$(PBI_LOCATION)"'"}'
+            echo '{"k":"PBI_GATEWAY_NAME","v":"'"$(PBI_GATEWAY_NAME)"'"}'
+            echo '{"k":"PBI_VNET_RG","v":"'"$(PBI_VNET_RG)"'"}'
+            echo '{"k":"PBI_VNET_NAME","v":"'"$(PBI_VNET_NAME)"'"}'
+            echo '{"k":"PBI_SUBNET_NAME","v":"'"$(PBI_SUBNET_NAME)"'"}'
+            echo '{"k":"PBI_SUBNET_CIDR","v":"'"$(PBI_SUBNET_CIDR)"'"}'
+            echo '{"k":"PBI_ENVIRONMENT_IDS","v":"'"$(PBI_ENVIRONMENT_IDS)"'"}'
+          } | mkvars "$tmp_pbi"
+
+          # Upsert groups ------------------------------------------------------
+          upsert_classic "vg-core-bootstrap" "Core bootstrap variables (01-bootstrap)" "$tmp_boot"
+          upsert_classic "vg-core-network"   "Core network variables (02-vnet-dns-pe)" "$tmp_net"
+          upsert_classic "vg-customer-washington" "Customer 'washington' storage variables" "$tmp_cust"
+          upsert_classic "vg-powerbi-gateway" "Power BI VNet gateway configuration" "$tmp_pbi"
+          upsert_kv      "vg-kv-backend" "$(KV_NAME)" "$(KV_SC_NAME)" "$(KV_SECRET_NAMES)"
+
+          echo
+          echo "Done. Variable groups ensured:"
+          echo "  - vg-core-bootstrap"
+          echo "  - vg-core-network"
+          echo "  - vg-customer-washington"
+          echo "  - vg-powerbi-gateway"
+          echo "  - vg-kv-backend"

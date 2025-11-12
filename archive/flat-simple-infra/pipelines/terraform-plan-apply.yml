@@ -1,0 +1,41 @@
+trigger: none
+parameters:
+- name: Environment
+  type: string
+  default: dev
+  values: [dev, stage, prod]
+
+pool:
+  name: self-hosted-linux
+
+variables:
+  TF_VERSION: '1.6.6'
+  AZ_SUBSCRIPTION: 'My-ARM-Connection-OIDC'
+
+stages:
+- stage: terraform
+  jobs:
+  - job: plan_apply
+    steps:
+    - task: AzureCLI@2
+      inputs:
+        azureSubscription: $(AZ_SUBSCRIPTION)
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          az account show
+    - bash: |
+        curl -fsSL https://releases.hashicorp.com/terraform/$(TF_VERSION)/terraform_$(TF_VERSION)_linux_amd64.zip -o tf.zip
+        unzip -o tf.zip -d /usr/local/bin
+        terraform -version
+      displayName: Install Terraform
+    - bash: |
+        export ENV=${{ parameters.Environment }}
+        terraform init -backend-config=backend.hcl -backend-config="key=code-runner/${ENV}.tfstate"
+        terraform validate
+        terraform plan -var-file=environments/${ENV}.tfvars -out=tfplan
+      displayName: Terraform init/plan
+    - bash: |
+        terraform apply -auto-approve tfplan
+      displayName: Terraform apply
+      condition: and(succeeded(), eq(variables['Build.Reason'], 'Manual'))

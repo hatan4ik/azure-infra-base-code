@@ -1,0 +1,33 @@
+# pipelines/stages/03-customer-storage.stage.yml
+parameters:
+  environmentName: ''
+  serviceConnection: ''
+  variableGroups: []
+  scriptsDir: ''
+
+stages:
+- stage: CustomerStorage
+  displayName: "03 • Per-customer storage (ADLS + containers + diag + RBAC + PE)"
+  variables:
+  - ${{ each vg in parameters.variableGroups }}:
+    - group: ${{ vg }}
+
+  jobs:
+  - deployment: CustStorage
+    displayName: "Ensure per-customer storage + PE"
+    environment: ${{ parameters.environmentName }}
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - checkout: self
+            clean: true
+          - task: AzureCLI@2
+            displayName: "Run customer_storage.sh"
+            inputs:
+              azureSubscription: ${{ parameters.serviceConnection }}
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -euo pipefail
+                bash "${{ parameters.scriptsDir }}/customer_storage.sh"

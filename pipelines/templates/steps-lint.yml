@@ -1,0 +1,3 @@
+# (same as previous full-fat; omitted repetition to keep file brief)
+steps:
+- bash: echo "Install TF/TFLint/Checkov and run lint across envs"

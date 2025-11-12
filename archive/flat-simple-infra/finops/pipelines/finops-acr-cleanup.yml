@@ -1,0 +1,24 @@
+# Weekly purge of untagged images (>30 days) from ACR
+trigger: none
+schedules:
+  - cron: "0 3 * * 0"    # Sun 03:00 UTC
+    always: true
+    branches:
+      include: [ main ]
+
+pool:
+  name: self-hosted-linux
+
+variables:
+  AZ_SUBSCRIPTION: 'My-ARM-Connection-OIDC'
+  ACR_NAME: 'myacr'
+
+steps:
+  - task: AzureCLI@2
+    displayName: Purge untagged images older than 30 days
+    inputs:
+      azureSubscription: $(AZ_SUBSCRIPTION)
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        az acr run -n $(ACR_NAME)           --cmd "acr purge --filter '*/.*' --untagged --ago 30d" /dev/null

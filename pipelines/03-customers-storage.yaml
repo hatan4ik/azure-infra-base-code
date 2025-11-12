@@ -1,0 +1,204 @@
+# Job template: Per-customer ADLS Gen2 + containers + LAW diagnostics + MI RBAC + PE into core VNet
+# IMPORTANT: for ADLS Gen2 (HNS=true) we create TWO PEs: one for 'blob' and one for 'dfs'.
+
+parameters:
+  - name: oidcServiceConnection
+    type: string
+    default: My-ARM-Connection-OIDC
+  - name: customer
+    type: object
+    default:
+      slug: washington
+      location: eastus
+      dataRG: rg-example-data-washington
+      saName: ""               # auto-generate st<slug><rand> if empty
+      containersCsv: "invoices,archive"
+      enableStoragePE: true
+  - name: law
+    type: object
+    default:
+      rg: rg-example-tfstate
+      name: law-example-platform
+  - name: mi
+    type: object
+    default:
+      rg: rg-ado-wif
+      name: ado-wif-mi
+  - name: coreNet
+    type: object
+    default:
+      netRG: rg-example-core-net
+      vnetName: vnet-example-core
+      peSubnetName: snet-private-endpoints
+      zones:
+        blob: privatelink.blob.core.windows.net
+        dfs:  privatelink.dfs.core.windows.net
+  - name: tags
+    type: object
+    default:
+      BusinessUnit: data
+      Environment:  prod
+      Owner:        platform-team
+      CostCenter:   cc-002
+      System:       example-data
+      Project:      example
+      Lifecycle:    long-lived
+      Contact:      devops@example.com
+  - name: enableDebug
+    type: boolean
+    default: false
+
+job: 'Customer_${{ replace(parameters.customer.slug, "-", "_") }}'
+displayName: "Customer storage (${{ parameters.customer.slug }})"
+variables:
+  LOCATION:  ${{ parameters.customer.location }}
+  DATA_RG:   ${{ parameters.customer.dataRG }}
+  SA_NAME:   ${{ parameters.customer.saName }}
+  C_CSV:     ${{ parameters.customer.containersCsv }}
+  ENABLE_PE: ${{ parameters.customer.enableStoragePE }}
+
+  LAW_RG:    ${{ parameters.law.rg }}
+  LAW_NAME:  ${{ parameters.law.name }}
+
+  MI_RG:     ${{ parameters.mi.rg }}
+  MI_NAME:   ${{ parameters.mi.name }}
+
+  NET_RG:    ${{ parameters.coreNet.netRG }}
+  VNET_NAME: ${{ parameters.coreNet.vnetName }}
+  SNET_PE:   ${{ parameters.coreNet.peSubnetName }}
+  Z_BLOB:    ${{ parameters.coreNet.zones.blob }}
+  Z_DFS:     ${{ parameters.coreNet.zones.dfs }}
+
+  TAG_BusinessUnit: ${{ parameters.tags.BusinessUnit }}
+  TAG_Environment:  ${{ parameters.tags.Environment }}
+  TAG_Owner:        ${{ parameters.tags.Owner }}
+  TAG_CostCenter:   ${{ parameters.tags.CostCenter }}
+  TAG_System:       ${{ parameters.tags.System }}
+  TAG_Project:      ${{ parameters.tags.Project }}
+  TAG_Lifecycle:    ${{ parameters.tags.Lifecycle }}
+  TAG_Contact:      ${{ parameters.tags.Contact }}
+
+  DEBUG: ${{ parameters.enableDebug }}
+
+steps:
+- task: AzureCLI@2
+  displayName: "Ensure SA + containers + diag + RBAC + PEs"
+  inputs:
+    azureSubscription: '${{ parameters.oidcServiceConnection }}'
+    scriptType: bash
+    scriptLocation: inlineScript
+    inlineScript: |
+      set -euo pipefail
+      [[ "$(DEBUG)" == "true" ]] && set -x
+      az config set extension.use_dynamic_install=yes_without_prompt >/dev/null 2>&1 || true
+
+      echo "> Subscription:"
+      az account show --query "{name:name,id:id,tenantId:tenantId}" -o tsv | awk '{printf "  - %s (%s) tenant=%s\n",$1,$2,$3}'
+      subId="$(az account show --query id -o tsv)"
+
+      # tags
+      declare -a TAGS=()
+      TAGS+=("BusinessUnit=$(TAG_BusinessUnit)")
+      TAGS+=("Environment=$(TAG_Environment)")
+      TAGS+=("Owner=$(TAG_Owner)")
+      TAGS+=("CostCenter=$(TAG_CostCenter)")
+      TAGS+=("System=$(TAG_System)")
+      TAGS+=("Project=$(TAG_Project)")
+      TAGS+=("Lifecycle=$(TAG_Lifecycle)")
+      TAGS+=("Contact=$(TAG_Contact)")
+
+      tg(){ local rid="$1"; shift; az resource tag --ids "$rid" --is-incremental --tags "$@" >/dev/null; }
+
+      # RG
+      if ! az group show -n "$(DATA_RG)" >/dev/null 2>&1; then
+        az group create -n "$(DATA_RG)" -l "$(LOCATION)" --tags "${TAGS[@]}" -o none
+      else
+        tg "/subscriptions/${subId}/resourceGroups/$(DATA_RG)" "${TAGS[@]}"
+      fi
+
+      # SA name
+      if [[ -z "$(SA_NAME)" ]]; then
+        prefix="st${{ parameters.customer.slug }}"
+        exist="$(az storage account list -g "$(DATA_RG)" --query "[?starts_with(name, '${prefix}')].name | [0]" -o tsv)"
+        if [[ -n "$exist" ]]; then sa="$exist"; else suf="$(tr -dc 'a-f0-9' </dev/urandom | head -c6)"; sa="${prefix}${suf:0:6}"; fi
+      else
+        sa="$(SA_NAME)"
+      fi
+      echo "SA: $sa"
+
+      # SA (ADLS Gen2)
+      if ! az storage account show -g "$(DATA_RG)" -n "$sa" >/dev/null 2>&1; then
+        az storage account create -g "$(DATA_RG)" -n "$sa" -l "$(LOCATION)" \
+          --sku Standard_LRS --kind StorageV2 --min-tls-version TLS1_2 \
+          --allow-blob-public-access false --https-only true --hns true \
+          --tags "${TAGS[@]}" -o none
+      else
+        saId="$(az storage account show -g "$(DATA_RG)" -n "$sa" --query id -o tsv)"
+        tg "$saId" "${TAGS[@]}"
+      fi
+      saId="$(az storage account show -g "$(DATA_RG)" -n "$sa" --query id -o tsv)"
+      hns="$(az storage account show -g "$(DATA_RG)" -n "$sa" --query isHnsEnabled -o tsv)"
+
+      # Containers
+      IFS=',' read -r -a CS <<<"$(C_CSV)"
+      for c in "${CS[@]}"; do
+        name="$(echo "$c" | xargs)"; [[ -z "$name" ]] && continue
+        az storage container create --name "$name" --account-name "$sa" --auth-mode login --public-access off -o none >/dev/null
+      done
+
+      # Diagnostics to LAW (if present)
+      LAW_ID="$(az monitor log-analytics workspace show -g "$(LAW_RG)" -n "$(LAW_NAME)" --query id -o tsv 2>/dev/null || true)"
+      if [[ -n "$LAW_ID" ]]; then
+        cats="$(az monitor diagnostic-settings categories list --resource "$saId" 2>/dev/null || echo '{}')"
+        logs="[]"; metrics="[]"
+        echo "$cats" | jq -e '.value[] | select(.type=="Log" and .name=="AuditEvent")' >/dev/null 2>&1 && logs='[{"category":"AuditEvent","enabled":true}]'
+        echo "$cats" | jq -e '.value[] | select(.type=="Metric" and .name=="AllMetrics")' >/dev/null 2>&1 && metrics='[{"category":"AllMetrics","enabled":true}]'
+        az monitor diagnostic-settings list --resource "$saId" -o tsv --query "value[?name=='ds-sa'].name" | grep -q . || \
+        az monitor diagnostic-settings create --name ds-sa --resource "$saId" --workspace "$LAW_ID" --logs "$logs" --metrics "$metrics" -o none || true
+      fi
+
+      # HNS-aware hardening (no versioning for HNS=true)
+      if [[ "$hns" == "true" ]]; then
+        az storage account blob-service-properties update -g "$(DATA_RG)" -n "$sa" --enable-delete-retention true --delete-retention-days 30 -o none
+      else
+        az storage account blob-service-properties update -g "$(DATA_RG)" -n "$sa" \
+          --enable-delete-retention true --delete-retention-days 30 \
+          --enable-versioning true --enable-container-delete-retention true --container-delete-retention-days 7 -o none
+      fi
+
+      # MI RBAC
+      MI_PID="$(az identity show -g "$(MI_RG)" -n "$(MI_NAME)" --query principalId -o tsv 2>/dev/null || true)"
+      if [[ -n "$MI_PID" ]]; then
+        az role assignment list --assignee-object-id "$MI_PID" --scope "$saId" --query "[?roleDefinitionName=='Storage Blob Data Contributor']|[0]" -o tsv | grep -q . || \
+        az role assignment create --assignee-object-id "$MI_PID" --role "Storage Blob Data Contributor" --scope "$saId" -o none || \
+        echo "WARN: grant UA/Owner to pipeline identity for RBAC creation."
+      fi
+
+      # Per-customer Private Endpoints (blob + dfs separately)
+      if [[ "$(ENABLE_PE)" == "true" ]]; then
+        SUBNET_ID="/subscriptions/${subId}/resourceGroups/$(NET_RG)/providers/Microsoft.Network/virtualNetworks/$(VNET_NAME)/subnets/$(SNET_PE)"
+        ZB="/subscriptions/${subId}/resourceGroups/$(NET_RG)/providers/Microsoft.Network/privateDnsZones/$(Z_BLOB)"
+        ZD="/subscriptions/${subId}/resourceGroups/$(NET_RG)/providers/Microsoft.Network/privateDnsZones/$(Z_DFS)"
+
+        # Blob PE
+        PE_B="pe-${sa}-blob";  CN_B="conn-${sa}-blob"
+        az network private-endpoint show -g "$(DATA_RG)" -n "$PE_B" >/dev/null 2>&1 || \
+        az network private-endpoint create -g "$(DATA_RG)" -n "$PE_B" -l "$(LOCATION)" \
+          --subnet "$SUBNET_ID" --private-connection-resource-id "$saId" \
+          --group-ids blob --connection-name "$CN_B" --tags "${TAGS[@]}" -o none
+        az network private-endpoint dns-zone-group show -g "$(DATA_RG)" --endpoint-name "$PE_B" -n "dzg-${sa}-blob" >/dev/null 2>&1 || \
+        az network private-endpoint dns-zone-group create -g "$(DATA_RG)" --endpoint-name "$PE_B" -n "dzg-${sa}-blob" --private-dns-zone "$ZB" -o none
+
+        if [[ "$hns" == "true" ]]; then
+          # DFS PE (separate)
+          PE_D="pe-${sa}-dfs"; CN_D="conn-${sa}-dfs"
+          az network private-endpoint show -g "$(DATA_RG)" -n "$PE_D" >/dev/null 2>&1 || \
+          az network private-endpoint create -g "$(DATA_RG)" -n "$PE_D" -l "$(LOCATION)" \
+            --subnet "$SUBNET_ID" --private-connection-resource-id "$saId" \
+            --group-ids dfs --connection-name "$CN_D" --tags "${TAGS[@]}" -o none
+          az network private-endpoint dns-zone-group show -g "$(DATA_RG)" --endpoint-name "$PE_D" -n "dzg-${sa}-dfs" >/dev/null 2>&1 || \
+          az network private-endpoint dns-zone-group create -g "$(DATA_RG)" --endpoint-name "$PE_D" -n "dzg-${sa}-dfs" --private-dns-zone "$ZD" -o none
+        fi
+      fi
+
+      echo "✓ Customer '${{ parameters.customer.slug }}' ready."

@@ -1,0 +1,31 @@
+# pipelines/stages/00-var-groups.stage.yml
+parameters:
+  environmentName: ''
+  serviceConnection: ''
+  scriptsDir: ''
+
+stages:
+- stage: VariableGroups
+  displayName: "00 • Variable Groups (optional)"
+  jobs:
+  - deployment: VGsDeploy
+    displayName: "Create/refresh variable groups"
+    environment: ${{ parameters.environmentName }}
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+            - template: ../steps/prepare-scripts.step.yml
+              parameters:
+                scriptsDir: ${{ parameters.scriptsDir }}
+
+            # IMPORTANT: Enable "Allow scripts to access the OAuth token" in pipeline settings
+            - task: AzureCLI@2
+              displayName: "Run create_var_groups.sh (uses System.AccessToken)"
+              inputs:
+                azureSubscription: '${{ parameters.serviceConnection }}'
+                scriptType: bash
+                scriptLocation: scriptPath
+                scriptPath: '${{ parameters.scriptsDir }}/create_var_groups.sh'
+              env:
+                SYSTEM_ACCESSTOKEN: $(System.AccessToken)

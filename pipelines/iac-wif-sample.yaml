@@ -1,0 +1,75 @@
+# pipelines/iac-wif-sample.yml
+# Example multi-stage pipeline that:
+#  1) Runs the OIDC sanity job (template)
+#  2) Plans Terraform using the same WIF Service Connection (no secrets)
+
+trigger:
+  branches:
+    include:
+    - main
+
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+# IMPORTANT: In the pipeline UI of this pipeline definition,
+# enable "Allow scripts to access the OAuth token".
+
+stages:
+- stage: sanity
+  displayName: "Stage: OIDC sanity"
+  jobs:
+  - template: ../templates/oidc-sanity.yml
+    parameters:
+      scName: 'My-ARM-Connection-OIDC'                # <-- your SC name
+      scIdOverride: '00000000-0000-0000-0000-000000000000' # <-- replace with your SC GUID or leave empty to resolve by name
+      debug: false
+
+- stage: plan
+  displayName: "Stage: Terraform plan (WIF)"
+  dependsOn: sanity
+  condition: succeeded()   # only run if sanity passed
+  jobs:
+  - job: tf_plan
+    displayName: "Terraform plan using WIF"
+    pool:
+      vmImage: ubuntu-latest
+    steps:
+    - checkout: self
+
+    - task: AzureCLI@2
+      displayName: "az whoami (WIF via SC)"
+      inputs:
+        azureSubscription: My-ARM-Connection-OIDC
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          set -euo pipefail
+          az account show --query "[id, name, user]" -o table
+
+    - task: AzureCLI@2
+      displayName: "terraform init/plan (no secrets)"
+      inputs:
+        azureSubscription: My-ARM-Connection-OIDC
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          set -euo pipefail
+          sudo apt-get update -y
+          sudo apt-get install -y unzip jq
+          # Install terraform if not in image
+          if ! command -v terraform >/dev/null; then
+            curl -sSLo tf.zip https://releases.hashicorp.com/terraform/1.9.8/terraform_1.9.8_linux_amd64.zip
+            unzip tf.zip && sudo mv terraform /usr/local/bin/ && rm -f tf.zip
+          fi
+
+          # AzureCLI@2 logs in for us using the WIF SC; export env for Terraform
+          export ARM_USE_OIDC=true
+          export ARM_CLIENT_ID="${servicePrincipalId}"
+          export ARM_TENANT_ID="${tenantId}"
+          export ARM_SUBSCRIPTION_ID="${subscriptionId}"
+
+          terraform -version
+          terraform init -input=false
+          terraform plan -input=false -no-color

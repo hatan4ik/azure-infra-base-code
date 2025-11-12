@@ -1,0 +1,22 @@
+#cloud-config
+package_update: true
+packages: [ jq, curl, docker.io ]
+runcmd:
+  - bash -lc 'set -euo pipefail
+    az login --identity || true
+    KV_NAME=$(az keyvault list --query "[0].name" -o tsv) || true
+    AZDO_PAT=$(az keyvault secret show --vault-name "$KV_NAME" --name "azdo-agent-pat" --query value -o tsv) || true
+    if [ -z "$AZDO_PAT" ] || [ "$AZDO_PAT" = "SET-ME-AFTER-KV-IS-CREATED" ]; then
+      echo "Set azdo-agent-pat in Key Vault, then reimage."; exit 0; fi
+    AGENT_VERSION=3.233.1
+    AGENT_ROOT=/opt/azdo-agent
+    mkdir -p $AGENT_ROOT && cd $AGENT_ROOT
+    curl -L -o agent.tgz https://vstsagentpackage.azureedge.net/agent/${AGENT_VERSION}/vsts-agent-linux-x64-${AGENT_VERSION}.tar.gz
+    tar zxvf agent.tgz
+    useradd -m -s /bin/bash azp || true
+    chown -R azp:azp $AGENT_ROOT
+    runuser -u azp -- ./bin/installdependencies.sh || true
+    ORG_URL=${ORG_URL:-"https://dev.azure.com/<ORG>"}; POOL=${POOL:-"self-hosted-linux"}
+    ./config.sh --unattended --url "$ORG_URL" --auth pat --token "$AZDO_PAT" --pool "$POOL" --agent "$(hostname)-$(date +%s)" --replace --acceptTeeEula
+    ./svc.sh install && ./svc.sh start
+  '

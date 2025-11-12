@@ -1,0 +1,30 @@
+# pipelines/stages/04-powerbi-gateway.stage.yml
+parameters:
+  environmentName: ''
+  serviceConnection: ''
+  variableGroups: []
+  scriptsDir: ''
+
+stages:
+- stage: PowerBIGateway
+  displayName: "04 • Power BI VNet gateway"
+  variables:
+  - ${{ each vg in parameters.variableGroups }}:
+    - group: ${{ vg }}
+
+  condition: and(succeeded(), eq(variables['ENABLE_PBI_GATEWAY'], 'true'))
+  jobs:
+  - job: PowerBIGateway
+    displayName: "Ensure Power BI VNet gateway resource"
+    steps:
+    - checkout: self
+      clean: true
+    - task: AzureCLI@2
+      displayName: "Run powerbi_gateway.sh"
+      inputs:
+        azureSubscription: ${{ parameters.serviceConnection }}
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          set -euo pipefail
+          bash "${{ parameters.scriptsDir }}/powerbi_gateway.sh"

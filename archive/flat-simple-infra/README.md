@@ -1,0 +1,3 @@
+# Example CCOE Azure Cloud Infra — Secure Code-Runner Platform (Dev/Stage/Prod)
+...
+(See main chat for details; this repo contains Step 2 infra with DRY modules and env tfvars.)

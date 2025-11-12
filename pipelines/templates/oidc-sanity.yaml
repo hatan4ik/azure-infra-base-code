@@ -1,0 +1,291 @@
+# templates/oidc-sanity.yml
+# Re-usable OIDC sanity job for Azure DevOps ↔ EntraID WIF.
+# Requires: Pipeline setting "Allow scripts to access the OAuth token" = ON.
+
+parameters:
+  - name: scName
+    type: string
+    default: 'My-ARM-Connection-OIDC'
+  - name: scIdOverride
+    type: string
+    default: ''        # optional: paste the SC GUID to skip name lookup
+  - name: debug
+    type: boolean
+    default: false
+
+jobs:
+- job: oidc_sanity
+  displayName: "OIDC sanity (issuer/subject + real token)"
+  pool:
+    vmImage: ubuntu-latest
+
+  steps:
+  - checkout: none
+
+  # (Optional) Hydrate endpoint visibility in the job plan.
+  # Continue on error so a failed login doesn't fail the sanity job.
+  - task: AzureCLI@2
+    displayName: "Hydrate endpoint (noop az account show)"
+    continueOnError: true
+    inputs:
+      azureSubscription: ${{ parameters.scName }}
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set +e
+        az account show -o table || true
+
+  - bash: |
+      set -euo pipefail
+
+      # ---------- helpers ----------
+      urlenc() {
+        python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1]))' "$1"
+      }
+
+      b64url() {
+        local in="${1//-/+}"; in="${in//_/\/}"
+        local pad=$(( (4 - ${#in} % 4) % 4 ))
+        in="${in}$(printf '=%.0s' $(seq 1 $pad))"
+        printf "%s" "$in" | base64 -d 2>/dev/null || true
+      }
+
+      decode_jwt() {
+        local tok="$1"
+        IFS='.' read -r H P S <<<"$tok" || true
+        echo "-- JWT header --"
+        b64url "$H" | jq . || true
+        echo "-- JWT claims --"
+        b64url "$P" | jq . || true
+      }
+
+      header() { echo; echo "=== $* ==="; }
+
+      # ---------- environment ----------
+      : "${SYSTEM_ACCESSTOKEN:?System.AccessToken is empty. Enable 'Allow scripts to access the OAuth token' and retry.}"
+
+      ORG_URL="${SYSTEM_COLLECTIONURI%/}"
+      PROJECT="${SYSTEM_TEAMPROJECT}"
+      PROJ_ID="${SYSTEM_TEAMPROJECTID}"
+      PLAN_ID="${SYSTEM_PLANID:-}"
+      JOB_ID="${SYSTEM_JOBID:-}"
+      HUB_NAME="build"
+
+      SC_NAME="${SC_NAME:-${INPUT_SC_NAME:-}}"
+      SC_OVERRIDE_ID="${SC_OVERRIDE_ID:-${INPUT_SC_ID_OVERRIDE:-}}"
+      DEBUG="${DEBUG:-${INPUT_DEBUG:-false}}"
+      # lower-case compare safety
+      DEBUG_LC="${DEBUG,,}"
+
+      AUTHZ=(-H "Authorization: Bearer ${SYSTEM_ACCESSTOKEN}" -H "Content-Type: application/json")
+      API_71="?api-version=7.1"
+      API_71P="?api-version=7.1-preview.1"
+      API_SEP4="?api-version=7.1-preview.4"
+
+      [[ "$DEBUG_LC" == "true" ]] && {
+        echo "ORG_URL=${ORG_URL}"
+        echo "PROJECT=${PROJECT}"
+        echo "PROJ_ID=${PROJ_ID}"
+      }
+
+      header "1) Resolve Service Connection ID"
+      if [[ -n "${SC_OVERRIDE_ID}" ]]; then
+        echo "SC_ID (override) = ${SC_OVERRIDE_ID}"
+        SC_ID="${SC_OVERRIDE_ID}"
+      else
+        ENC_SC_NAME="$(urlenc "${SC_NAME}")"
+        RESP=$(curl -sS "${AUTHZ[@]}" \
+          "${ORG_URL}/${PROJECT}/_apis/serviceendpoint/endpoints?endpointNames=${ENC_SC_NAME}${API_71}")
+        SC_ID=$(echo "$RESP" | jq -r '.value[0].id // .id // empty')
+
+        if [[ -z "${SC_ID}" ]]; then
+          echo "Service Connection '${SC_NAME}' not found by exact name. Listing endpoints..."
+          LIST=$(curl -sS "${AUTHZ[@]}" \
+            "${ORG_URL}/${PROJECT}/_apis/serviceendpoint/endpoints${API_71}" )
+          echo "$LIST" | jq -r '.value[] | [.id, .name, .type] | @tsv' | sed -e $'1iID\tNAME\tTYPE'
+
+          SC_ID=$(echo "$LIST" | jq -r --arg n "$SC_NAME" '
+            .value[] | select((.name // "") | ascii_downcase == ($n | ascii_downcase)) | .id
+          ' | head -n1)
+
+          if [[ -z "${SC_ID}" ]]; then
+            SC_ID=$(echo "$LIST" | jq -r --arg n "$SC_NAME" '
+              .value[] | select((.name // "") | ascii_downcase | contains(($n | ascii_downcase))) | .id
+            ' | head -n1)
+          fi
+        fi
+
+        [[ -n "${SC_ID}" ]] || {
+          echo "ERROR: Service Connection '${SC_NAME}' not found in project '${PROJECT}'."
+          echo "Tip: pass parameters.scIdOverride with the GUID."
+          exit 2
+        }
+      fi
+      echo "SC_ID=${SC_ID}"
+
+      header "1.2) Validate endpoint really belongs to this project"
+      SC_JSON=$(curl -sS "${AUTHZ[@]}" \
+        "${ORG_URL}/${PROJECT}/_apis/serviceendpoint/endpoints/${SC_ID}?api-version=7.1") || true
+
+      SC_ID_CHECK=$(echo "$SC_JSON" | jq -r '.id // empty')
+      SC_PROJ_ID=$(echo "$SC_JSON" | jq -r '.serviceEndpointProjectReferences[0].projectReference.id // empty')
+      SC_NAME_ACT=$(echo "$SC_JSON" | jq -r '.name // empty')
+      SC_TYPE=$(echo "$SC_JSON" | jq -r '.type // empty')
+      SC_SCHEME=$(echo "$SC_JSON" | jq -r '.authorization.scheme // empty')
+
+      echo "Resolved endpoint:"
+      echo "  id     : ${SC_ID_CHECK}"
+      echo "  name   : ${SC_NAME_ACT}"
+      echo "  type   : ${SC_TYPE}"
+      echo "  scheme : ${SC_SCHEME}"
+      echo "  projId : ${SC_PROJ_ID} (pipeline projId=${PROJ_ID})"
+
+      if [[ -z "$SC_ID_CHECK" ]]; then
+        echo "ERROR: Could not GET endpoint ${SC_ID} in project ${PROJECT}."
+        exit 2
+      fi
+
+      if [[ "$SC_PROJ_ID" != "$PROJ_ID" ]]; then
+        echo "ERROR: Endpoint ${SC_ID} belongs to a different project (${SC_PROJ_ID})."
+        echo "Fix: Create/share the SC in this project OR run this pipeline in that project."
+        exit 2
+      fi
+
+      echo "   - Validation passed. Waiting 15s for ADO backend services to synchronize..."
+      sleep 15
+
+      header "1.1) Force auth metadata refresh (issuer/subject hydration)"
+      curl -sS -X POST "${AUTHZ[@]}" \
+        "${ORG_URL}/${PROJECT}/_apis/serviceendpoint/endpoints${API_71}&endpointIds=${SC_ID}" \
+        --data '[]' >/dev/null || true
+
+      header "1.2) Read expected issuer/subject from endpoint"
+      SC=$(curl -sS "${AUTHZ[@]}" \
+        "${ORG_URL}/${PROJECT}/_apis/serviceendpoint/endpoints/${SC_ID}${API_SEP4}")
+      EXPECT_ISS=$(echo "$SC" | jq -r '.authorization.parameters.workloadIdentityFederationIssuer // .authorization.parameters.issuer // empty')
+      EXPECT_SUB=$(echo "$SC" | jq -r '.authorization.parameters.workloadIdentityFederationSubject // .authorization.parameters.subject // empty')
+
+      if [[ -z "${EXPECT_ISS}" || -z "${EXPECT_SUB}" || "${EXPECT_ISS}" == "null" || "${EXPECT_SUB}" == "null" ]]; then
+        echo "ERROR: Endpoint has no issuer/subject yet (still hydrating?)."
+        echo "Raw endpoint snippet:"; echo "$SC" | jq '{authorization:{parameters:.authorization.parameters}}'
+        exit 3
+      fi
+
+      echo "Expected issuer : ${EXPECT_ISS}"
+      echo "Expected subject: ${EXPECT_SUB}"
+
+      header "2) (Optional) Decode System.AccessToken if it looks like a JWT"
+      if [[ "${SYSTEM_ACCESSTOKEN}" == *.*.* ]]; then
+        echo "(System.AccessToken appears JWT-like; decoding for visibility only)"
+        decode_jwt "${SYSTEM_ACCESSTOKEN}" || true
+      else
+        echo "(System.AccessToken is not a JWT; normal for ADO job tokens)"
+      fi
+
+      header "3) Request REAL OIDC ID token for this job"
+
+      build_oidc_url() {
+        local base="$1"
+        local url
+        url="${base}/_apis/distributedtask/hubs/${HUB_NAME}/plans/${PLAN_ID}/jobs/${JOB_ID}/oidctoken"
+        url="${url}?api-version=7.1-preview.1&serviceConnectionId=${SC_ID}"
+        printf '%s' "$url"
+      }
+
+      normalize_oidc_url() {
+        local url="$1"
+        if [[ "$url" != *"api-version="* ]]; then
+          local sep='&'; [[ "$url" != *"?"* ]] && sep='?'
+          url="${url}${sep}api-version=7.1-preview.1"
+        fi
+        if [[ "$url" != *"serviceConnectionId="* ]]; then
+          local sep='&'; [[ "$url" != *"?"* ]] && sep='?'
+          url="${url}${sep}serviceConnectionId=${SC_ID}"
+        fi
+        printf '%s' "$url"
+      }
+
+      AUTHZ_OIDC=(-H "Authorization: Bearer ${SYSTEM_ACCESSTOKEN}" \
+                  -H "Accept: application/json;api-version=7.1-preview.1" \
+                  -H "Content-Type: application/json")
+
+      fetch_oidc() {
+        local url="$1"
+        local resp code body
+        resp="$(curl -sS -w $'\n%{http_code}' -X POST "${AUTHZ_OIDC[@]}" --data '' "$url")" || return 1
+        code="${resp##*$'\n'}"
+        body="${resp%$'\n'*}"
+        if [[ "${code}" != "200" ]]; then
+          echo "OIDC HTTP ${code} @ ${url}" >&2
+          echo "OIDC body (first 400 chars):" >&2
+          printf '%s' "${body}" | head -c 400 >&2; echo >&2
+          return 1
+        fi
+        printf '%s' "${body}" | jq -r '.oidcToken // empty'
+      }
+
+      CANDIDATES=()
+      if [[ -n "${SYSTEM_OIDCREQUESTURI:-}" ]]; then CANDIDATES+=("$(normalize_oidc_url "$SYSTEM_OIDCREQUESTURI")"); fi
+      CANDIDATES+=("$(build_oidc_url "${ORG_URL}/${PROJ_ID}")")
+      CANDIDATES+=("$(build_oidc_url "${ORG_URL}/${PROJECT}")")
+
+      OIDC_TOKEN=""
+      for url in "${CANDIDATES[@]}"; do
+        echo "Trying OIDC_URL=${url}"
+        OIDC_TOKEN="$(fetch_oidc "$url" || true)"
+        [[ -n "$OIDC_TOKEN" ]] && break
+      done
+
+      if [[ -z "${OIDC_TOKEN}" ]]; then
+        echo "No token returned; attempting to authorize this pipeline on the endpoint and retry..."
+        DEF_ID="${SYSTEM_DEFINITIONID:?Missing SYSTEM_DEFINITIONID}"
+        AUTH_PAYLOAD=$(printf '{ "resources": [ { "resource": { "id": "%s", "type": "endpoint" }, "pipelines": [ { "id": %s, "authorized": true } ] } ] }' \
+          "${SC_ID}" "${DEF_ID}")
+        curl -sS -X PATCH "${AUTHZ[@]}" \
+          "${ORG_URL}/${PROJECT}/_apis/pipelines/pipelinepermissions${API_71P}" \
+          --data "${AUTH_PAYLOAD}" >/dev/null || true
+
+        sleep 3
+        for url in "${CANDIDATES[@]}"; do
+          echo "Retrying OIDC_URL=${url}"
+          OIDC_TOKEN="$(fetch_oidc "$url" || true)"
+          [[ -n "$OIDC_TOKEN" ]] && break
+        done
+      fi
+
+      [[ -n "${OIDC_TOKEN}" ]] || { echo "ERROR: Still failed to obtain OIDC token. Check endpoint authorization and job variables."; exit 4; }
+
+      echo "OIDC token acquired (length: ${#OIDC_TOKEN})"
+
+      header "3.1) Decode OIDC token and assert iss/sub"
+      IFS='.' read -r T_H T_P T_S <<< "${OIDC_TOKEN}"
+      CLAIMS="$(b64url "${T_P}")"
+      TOK_ISS="$(echo "${CLAIMS}" | jq -r '.iss')"
+      TOK_SUB="$(echo "${CLAIMS}" | jq -r '.sub')"
+      TOK_AUD="$(echo "${CLAIMS}" | jq -r '.aud')"
+
+      echo "Token iss : ${TOK_ISS}"
+      echo "Token sub : ${TOK_SUB}"
+      echo "Token aud : ${TOK_AUD}"
+
+      if [[ "${TOK_ISS}" != "${EXPECT_ISS}" ]]; then
+        echo "ERROR: Issuer mismatch."
+        echo "Expected: ${EXPECT_ISS}"
+        echo "Actual  : ${TOK_ISS}"
+        exit 5
+      fi
+      if [[ "${TOK_SUB}" != "${EXPECT_SUB}" ]]; then
+        echo "ERROR: Subject mismatch."
+        echo "Expected: ${EXPECT_SUB}"
+        echo "Actual  : ${TOK_SUB}"
+        exit 6
+      fi
+
+      echo "OIDC sanity passed. iss/sub match the service connection; token is valid for federation."
+    displayName: "Sanity: resolve endpoint, fetch OIDC token, assert iss/sub"
+    env:
+      SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+      # allow passing values in from the template call (for Bash to read)
+      INPUT_SC_NAME: ${{ parameters.scName }}
+      INPUT_SC_ID_OVERRIDE: ${{ parameters.scIdOverride }}
+      INPUT_DEBUG: ${{ parameters.debug }}

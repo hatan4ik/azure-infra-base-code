@@ -1,0 +1,38 @@
+parameters:
+  - name: env
+    type: string
+  - name: planOnly
+    type: boolean
+    default: false
+
+steps:
+- task: TerraformCLI@1
+  displayName: 'Terraform Init (${{ parameters.env }})'
+  inputs:
+    command: 'init'
+    workingDirectory: 'environments/${{ parameters.env }}'
+    backendType: 'azurerm'
+    ensureBackend: true
+    backendServiceArm: '$(ARM_CONNECTION)'
+    backendAzureRmResourceGroupName: '$(TFSTATE_RG)'
+    backendAzureRmStorageAccountName: '$(TFSTATE_SA)'
+    backendAzureRmContainerName: '$(TFSTATE_CONTAINER)'
+    backendAzureRmKey: 'env-${{ parameters.env }}.tfstate'
+
+- task: TerraformCLI@1
+  displayName: 'Terraform Plan (${{ parameters.env }})'
+  inputs:
+    command: 'plan'
+    workingDirectory: 'environments/${{ parameters.env }}'
+    environmentServiceName: '$(ARM_CONNECTION)'
+    commandOptions: '-var-file=terraform.tfvars -out=tfplan'
+
+- ${{ if not(parameters.planOnly) }}:
+  - task: TerraformCLI@1
+    displayName: 'Terraform Apply (${{ parameters.env }})'
+    inputs:
+      command: 'apply'
+      workingDirectory: 'environments/${{ parameters.env }}'
+      environmentServiceName: '$(ARM_CONNECTION)'
+      commandOptions: '-auto-approve tfplan'
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))

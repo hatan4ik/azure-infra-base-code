@@ -1,0 +1,138 @@
+# 90-nuke-core-net.yaml
+# Danger: destroys the core network RG and any in-subscription PEs attached to its subnets.
+# Requires: OIDC-enabled service connection with rights to delete RG/resources (Owner is safest).
+
+trigger: none
+pr: none
+
+pool:
+  vmImage: ubuntu-latest
+
+variables:
+  OIDC_SERVICE_CONNECTION: 'My-ARM-Connection-OIDC'
+
+  # Target to nuke
+  NET_RG: 'rg-example-core-net'
+  VNET_NAME: 'vnet-example-core'
+  SNET_WORKLOADS_NAME: 'snet-workloads'
+  SNET_PE_NAME: 'snet-private-endpoints'
+
+  # Safety switches
+  CONFIRM_NUKE: 'YES'     # must be 'YES'
+  DRY_RUN: 'false'       # set 'true' to only list what would be deleted
+
+stages:
+- stage: NukeCoreNetwork
+  displayName: "NUKE: core network RG + dependencies"
+  condition: succeeded()
+  jobs:
+  - job: Nuke
+    displayName: "Destroy $(NET_RG) after detaching cross-RG PEs"
+    steps:
+    - task: AzureCLI@2
+      displayName: "Preflight + delete PEs + nuke RG"
+      inputs:
+        azureSubscription: '$(OIDC_SERVICE_CONNECTION)'
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          set -euo pipefail
+
+          echo ">>> SAFETY CHECKS"
+          if [[ "$(CONFIRM_NUKE)" != "YES" ]]; then
+            echo "ERROR: Set pipeline variable CONFIRM_NUKE='YES' to proceed." >&2
+            exit 2
+          fi
+
+          SUB_ID="$(az account show --query id -o tsv)"
+          echo "> Subscription: $(az account show --query '{name:name,id:id,tenant:tenantId}' -o tsv)"
+
+          # If RG missing, we're done.
+          if ! az group show -n "$(NET_RG)" >/dev/null 2>&1; then
+            echo "RG '$(NET_RG)' not found. Nothing to delete."
+            exit 0
+          fi
+
+          # Resolve subnet IDs (may not exist if VNet already gone/partial)
+          echo ">>> Resolve VNet + subnet IDs (best-effort)"
+          VNET_ID="$(az network vnet show -g "$(NET_RG)" -n "$(VNET_NAME)" --query id -o tsv 2>/dev/null || true)"
+          SNET_W_ID="$(az network vnet subnet show -g "$(NET_RG)" --vnet-name "$(VNET_NAME)" -n "$(SNET_WORKLOADS_NAME)" --query id -o tsv 2>/dev/null || true)"
+          SNET_PE_ID="$(az network vnet subnet show -g "$(NET_RG)" --vnet-name "$(VNET_NAME)" -n "$(SNET_PE_NAME)" --query id -o tsv 2>/dev/null || true)"
+
+          echo "VNET_ID=${VNET_ID:-<missing>}"
+          echo "SNET_W_ID=${SNET_W_ID:-<missing>}"
+          echo "SNET_PE_ID=${SNET_PE_ID:-<missing>}"
+
+          echo ">>> Enumerate Private Endpoints attached to these subnets (across subscription)"
+          # Filter: any PE whose subnet.id contains either subnet ID
+          # Output as TSV: "<name>\t<resourceGroup>"
+          PE_TSV=""
+          if [[ -n "${SNET_W_ID:-}" || -n "${SNET_PE_ID:-}" ]]; then
+            # Build JMESPath filter dynamically
+            JQ="[?"
+            SEP=""
+            if [[ -n "${SNET_W_ID:-}" ]]; then
+              JQ="${JQ}contains(subnet.id, \`${SNET_W_ID}\`)"
+              SEP=" || "
+            fi
+            if [[ -n "${SNET_PE_ID:-}" ]]; then
+              JQ="${JQ}${SEP}contains(subnet.id, \`${SNET_PE_ID}\`)"
+            fi
+            JQ="${JQ}].[name,resourceGroup]"
+            PE_TSV="$(az network private-endpoint list --subscription "$SUB_ID" --query "$JQ" -o tsv || true)"
+          fi
+
+          if [[ -z "${PE_TSV}" ]]; then
+            echo "No cross-RG Private Endpoints referencing core subnets."
+          else
+            echo "Found Private Endpoints referencing core subnets:"
+            echo "${PE_TSV}" | sed 's/^/  - /'
+          fi
+
+          if [[ "$(DRY_RUN)" == "true" ]]; then
+            echo "DRY_RUN=true: stopping before deletion."
+            exit 0
+          fi
+
+          echo ">>> Deleting referenced Private Endpoints (safe to retry)"
+          if [[ -n "${PE_TSV}" ]]; then
+            while IFS=$'\t' read -r PE_NAME PE_RG; do
+              [[ -z "$PE_NAME" || -z "$PE_RG" ]] && continue
+              echo "  - Deleting PE ${PE_RG}/${PE_NAME} ..."
+              az network private-endpoint delete -g "$PE_RG" -n "$PE_NAME" --yes || true
+            done <<< "${PE_TSV}"
+          fi
+
+          echo ">>> Remove resource locks (if any) on $(NET_RG)"
+          LOCKS_JSON="$(az lock list -g "$(NET_RG)" -o json 2>/dev/null || echo '[]')"
+          if [[ "$(echo "$LOCKS_JSON" | jq 'length' 2>/dev/null || echo 0)" -gt 0 ]]; then
+            echo "$LOCKS_JSON" | jq -r '.[].id' | while read -r LID; do
+              echo "  - Deleting lock: $LID"
+              az lock delete --ids "$LID" || true
+            done
+          else
+            echo "  - No locks"
+          fi
+
+          echo ">>> Best-effort: delete VNet first (catches any lingering dependencies)"
+          if [[ -n "${VNET_ID:-}" ]]; then
+            az network vnet delete -g "$(NET_RG)" -n "$(VNET_NAME)" || echo "  - VNet delete attempt finished (may already be gone)."
+          fi
+
+          echo ">>> Final: delete resource group $(NET_RG)"
+          az group delete -n "$(NET_RG)" --yes --verbose
+
+          echo ">>> Verification"
+          if az group show -n "$(NET_RG)" >/dev/null 2>&1; then
+            echo "WARNING: RG still present (deletion may be in-progress)."
+            exit 0
+          else
+            echo "✓ RG $(NET_RG) fully deleted."
+          fi
+    - task: Bash@3
+      displayName: "Post-run reminder"
+      condition: succeeded()
+      inputs:
+        targetType: inline
+        script: |
+          echo "Re-run your core networking pipeline (02-vnet-dns-pe.yaml) to recreate VNet, subnets, Private DNS, and optional PEs."

@@ -1,0 +1,170 @@
+parameters:
+  environmentName: "env-vg-setup"
+
+stages:
+- stage: SetupLibrary
+  displayName: "00 — Variable Groups (Library)"
+  jobs:
+  - deployment: SetupVGroups
+    environment: ${{ parameters.environmentName }}
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - checkout: self
+          - task: Bash@3
+            displayName: "Create/Update Variable Groups (idempotent)"
+            env:
+              SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+            inputs:
+              targetType: inline
+              script: |
+                set -euo pipefail
+
+                # ---- Discover org/project + REST auth ----
+                ORG_URL="${SYSTEM_TEAMFOUNDATIONCOLLECTIONURI%/}"
+                PROJ_NAME="${SYSTEM_TEAMPROJECT}"
+                API="${ORG_URL}/${PROJ_NAME}/_apis"
+                AUTH="Authorization: Bearer ${SYSTEM_ACCESSTOKEN}"
+                CT="Content-Type: application/json"
+                API_VER="7.1-preview.2"
+
+                # Basic helper
+                rest() {
+                  local m="$1"; shift
+                  local u="$1"; shift
+                  curl -sS -f -X "$m" \
+                    -H "$AUTH" -H "$CT" \
+                    "$u" "$@"
+                }
+
+                echo "Org: $ORG_URL"
+                echo "Project: $PROJ_NAME"
+
+                # ---- Resolve project id, service connection id (for KV VG) ----
+                PROJ_ID="$(rest GET "${ORG_URL}/_apis/projects?api-version=7.1" | jq -r ".value[] | select(.name==\"${PROJ_NAME}\") | .id")"
+                if [[ -z "$PROJ_ID" || "$PROJ_ID" == "null" ]]; then
+                  echo "ERROR: Cannot resolve project id"; exit 1
+                fi
+
+                # This SC is the one you already use for OIDC (ARM)
+                SC_NAME="My-ARM-Connection-OIDC"
+                SC_ID="$(az devops service-endpoint list --query "[?name=='${SC_NAME}'].id | [0]" -o tsv)"
+                if [[ -z "$SC_ID" ]]; then
+                  echo "ERROR: Cannot find service connection '${SC_NAME}'"; exit 1
+                fi
+
+                # ---- Idempotent VG upsert ----
+                ensure_vg() {
+                  local name="$1"; shift
+                  local body="$1"; shift
+                  local existing="$(rest GET "${API}/distributedtask/variablegroups?api-version=${API_VER}" | jq -r ".value[] | select(.name==\"${name}\") | .id")"
+                  if [[ -n "$existing" && "$existing" != "null" ]]; then
+                    echo "   - updating VG: ${name}"
+                    rest PUT "${API}/distributedtask/variablegroups/${existing}?api-version=${API_VER}" \
+                      --data-raw "$body" >/dev/null
+                  else
+                    echo "   - creating VG: ${name}"
+                    rest POST "${API}/distributedtask/variablegroups?api-version=${API_VER}" \
+                      --data-raw "$body" >/dev/null
+                  fi
+                }
+
+                # ---- vg-core-tags ----
+                ensure_vg "vg-core-tags" "$(jq -n --arg pid "$PROJ_ID" '{
+                  name: "vg-core-tags",
+                  type: "Vsts",
+                  variableGroupProjectReferences: [{projectReference: {id: $pid}}],
+                  variables: {
+                    TAG_BusinessUnit: { value: "core" },
+                    TAG_Environment:  { value: "prod" },
+                    TAG_Owner:        { value: "platform-team" },
+                    TAG_CostCenter:   { value: "cc-001" },
+                    TAG_System:       { value: "example-platform" },
+                    TAG_Project:      { value: "example" },
+                    TAG_Lifecycle:    { value: "long-lived" },
+                    TAG_Contact:      { value: "devops@example.com" }
+                  }
+                }')"
+
+                # ---- vg-core-platform (location, LAW, MI, ACR, KV) ----
+                ensure_vg "vg-core-platform" "$(jq -n --arg pid "$PROJ_ID" '{
+                  name: "vg-core-platform",
+                  type: "Vsts",
+                  variableGroupProjectReferences: [{projectReference: {id: $pid}}],
+                  variables: {
+                    LOCATION:        { value: "eastus" },
+                    LAW_RG:          { value: "rg-example-tfstate" },
+                    LAW_NAME:        { value: "law-example-platform" },
+                    MI_RESOURCE_GROUP:{ value: "rg-ado-wif" },
+                    MI_NAME:         { value: "ado-wif-mi" },
+                    ACR_RG:          { value: "rg-example-tfstate" },
+                    ACR_NAME:        { value: "acrexampleplatform" },
+                    KV_RG:           { value: "rg-example-tfstate" },
+                    KV_NAME:         { value: "kv-example-platform" }
+                  }
+                }')"
+
+                # ---- vg-core-bootstrap (tfstate + kv policy) ----
+                ensure_vg "vg-core-bootstrap" "$(jq -n --arg pid "$PROJ_ID" '{
+                  name: "vg-core-bootstrap",
+                  type: "Vsts",
+                  variableGroupProjectReferences: [{projectReference: {id: $pid}}],
+                  variables: {
+                    STATE_RG:                { value: "rg-example-tfstate" },
+                    STATE_SA:                { value: "stexampletfstate" },
+                    STATE_CONTAINER:         { value: "tfstate" },
+                    KV_RETENTION_DAYS:       { value: "30" },
+                    KV_PUBLIC_NETWORK_ACCESS:{ value: "Disabled" },
+                    ACR_PUBLIC_NETWORK_ENABLED: { value: "false" },
+                    ACR_SKU:                 { value: "Premium" }
+                  }
+                }')"
+
+                # ---- vg-core-net (VNet/Subnets/Private DNS zones) ----
+                ensure_vg "vg-core-net" "$(jq -n --arg pid "$PROJ_ID" '{
+                  name: "vg-core-net",
+                  type: "Vsts",
+                  variableGroupProjectReferences: [{projectReference: {id: $pid}}],
+                  variables: {
+                    NET_RG:           { value: "rg-example-core-net" },
+                    VNET_NAME:        { value: "vnet-example-core" },
+                    VNET_CIDR:        { value: "10.10.0.0/16" },
+                    SNET_WORKLOADS_NAME: { value: "snet-workloads" },
+                    SNET_WORKLOADS_CIDR: { value: "10.10.0.0/24" },
+                    SNET_PE_NAME:     { value: "snet-private-endpoints" },
+                    SNET_PE_CIDR:     { value: "10.10.1.0/24" },
+                    Z_BLOB:           { value: "privatelink.blob.core.windows.net" },
+                    Z_DFS:            { value: "privatelink.dfs.core.windows.net" },
+                    Z_KV:             { value: "privatelink.vaultcore.azure.net" },
+                    Z_ACR:            { value: "privatelink.azurecr.io" },
+                    ENABLE_PE_KV:     { value: "false" },
+                    ENABLE_PE_ACR:    { value: "false" }
+                  }
+                }')"
+
+                # ---- vg-customer-washington ----
+                ensure_vg "vg-customer-washington" "$(jq -n --arg pid "$PROJ_ID" '{
+                  name: "vg-customer-washington",
+                  type: "Vsts",
+                  variableGroupProjectReferences: [{projectReference: {id: $pid}}],
+                  variables: {
+                    CUSTOMER_SLUG: { value: "washington" },
+                    DATA_RG:       { value: "rg-example-data-washington" },
+                    SA_NAME:       { value: "" },
+                    CONTAINERS_CSV:{ value: "invoices,archive" },
+                    ENABLE_STORAGE_PE: { value: "true" }
+                  }
+                }')"
+
+                # ---- KeyVault-backed VG (points to your OIDC SC + vault) ----
+                # Note: This VG references your existing ARM SC and KV name; secrets are not enumerated here.
+                ensure_vg "vg-kv-backend" "$(jq -n --arg pid "$PROJ_ID" --arg sc "$SC_ID" '{
+                  name: "vg-kv-backend",
+                  type: "AzureKeyVault",
+                  variableGroupProjectReferences: [{projectReference: {id: $pid}}],
+                  providerData: { serviceEndpointId: $sc, vault: "kv-example-platform" },
+                  variables: {}
+                }')"
+
+                echo "✓ Variable Groups ensured."

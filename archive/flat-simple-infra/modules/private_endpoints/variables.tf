@@ -1,0 +1,11 @@
+variable "resource_group_name" { type = string }
+variable "location" { type = string }
+variable "vnet_id" { type = string }
+variable "plink_subnet_id" { type = string }
+variable "kv_id" { type = string }
+variable "kv_name" { type = string }
+variable "acr_id" { type = string }
+variable "acr_name" { type = string }
+variable "sa_id" { type = string }
+variable "sa_name" { type = string }
+variable "tags" { type = map(string) }

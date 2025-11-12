@@ -1,0 +1,31 @@
+parameters:
+  environmentName: "env-core-network"
+
+stages:
+- stage: CoreNetwork
+  displayName: "02 — Core VNet + Private DNS"
+  variables:
+    - group: vg-core-tags
+    - group: vg-core-platform
+    - group: vg-core-net
+  jobs:
+  - deployment: CoreNet
+    environment: ${{ parameters.environmentName }}
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - checkout: self
+          - task: AzureCLI@2
+            displayName: "Provision core networking"
+            inputs:
+              azureSubscription: 'My-ARM-Connection-OIDC'
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                # >>> Paste the *body* of your working 02-vnet-dns-pe.yaml here (no triggers/pool/variables).
+                # Keep the corrected subnet fit/expand logic, zone creation + links,
+                # and optional PE for KV/ACR (based on ENABLE_PE_*).
+                set -euo pipefail
+                echo "Net RG=$(NET_RG) VNET=$(VNET_NAME) CIDR=$(VNET_CIDR)"
+                # ... your existing core network inline script ...

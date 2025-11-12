@@ -1,0 +1,42 @@
+# pipelines/stages/01-bootstrap.stage.yml
+parameters:
+  environmentName: ''
+  serviceConnection: ''
+  variableGroups: []
+  scriptsDir: ''
+
+stages:
+- stage: Bootstrap
+  displayName: "01 • Bootstrap"
+  variables:
+  - ${{ each vg in parameters.variableGroups }}:
+    - group: ${{ vg }}
+
+  jobs:
+  - deployment: Bootstrap
+    displayName: "Bootstrap infra"
+    environment: ${{ parameters.environmentName }}
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - checkout: self
+            clean: true
+
+          # Optional tree for quick diag (toggle by variable if you want)
+          - bash: |
+              set -e
+              echo "Repo root: $(Build.SourcesDirectory)"
+              echo "Scripts dir: ${{ parameters.scriptsDir }}"
+              ls -la "${{ parameters.scriptsDir }}" || true
+            displayName: "Sanity: list scripts dir"
+
+          - task: AzureCLI@2
+            displayName: "Run bootstrap.sh"
+            inputs:
+              azureSubscription: ${{ parameters.serviceConnection }}
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -euo pipefail
+                bash "${{ parameters.scriptsDir }}/bootstrap.sh"
