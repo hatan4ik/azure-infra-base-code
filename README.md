@@ -5,6 +5,39 @@ Version 2.0 | Security First • Complete Automation • Robustness & Resilience
 
 ---
 
+## Table of Contents
+
+1. [Executive Summary](#executive-summary)
+2. [Architecture](#architecture)
+   - [System Architecture](#system-architecture)
+   - [Security Architecture](#security-architecture)
+   - [Network Architecture](#network-architecture)
+   - [Power BI Connectivity](#power-bi-connectivity)
+3. [Repository Structure](#repository-structure)
+4. [Zero-to-Hero Deployment](#zero-to-hero-deployment)
+   - [Prerequisites](#prerequisites)
+   - [Automated Deployment](#automated-deployment)
+   - [Verification](#verification)
+5. [Configuration Reference](#configuration-reference)
+   - [Bootstrap Variables](#bootstrap-variables)
+   - [Network Variables](#network-variables)
+   - [Customer Storage Variables](#customer-storage-variables)
+   - [Power BI Gateway Variables](#power-bi-gateway-variables)
+6. [Operations Guide](#operations-guide)
+   - [Daily Operations](#daily-operations)
+   - [Monitoring](#monitoring)
+   - [Maintenance](#maintenance)
+7. [Troubleshooting](#troubleshooting)
+   - [OIDC Issues](#oidc-issues)
+   - [Network Issues](#network-issues)
+   - [Power BI Gateway Issues](#power-bi-gateway-issues)
+   - [Script Issues](#script-issues)
+8. [Security & Compliance](#security--compliance)
+9. [Engineering Standards](#engineering-standards)
+10. [Appendix](#appendix)
+
+---
+
 ## Executive Summary
 
 The ExampleCorp Infrastructure Platform is the single source of truth for provisioning, securing, and operating Azure landing zones. This platform eliminates manual configuration, enforces security-by-default, and provides repeatable infrastructure deployment across all environments.
@@ -15,19 +48,25 @@ The ExampleCorp Infrastructure Platform is the single source of truth for provis
 - Private network connectivity for analytics workloads (Power BI)
 - Comprehensive observability with Log Analytics integration
 - Zero-trust security model with least-privilege RBAC
+- **100% automated deployment from zero to production in ~25 minutes**
+
+**Engineering Pillars:**
+- **Security First** – Passwordless automation via OIDC, least-privilege RBAC, auditable declarations
+- **Complete Automation** – No manual steps from bootstrap to teardown; everything is pipelined or scripted
+- **Robustness & Resilience** – Idempotent scripts, defensive retries, observability, and safe rollback paths
 
 ---
 
-## Architecture Overview
+## Architecture
 
-### High-Level System Architecture
+### System Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                     Azure DevOps Pipelines                          │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐             │
-│  │ Variable     │  │ Orchestrator │  │ Validation   │             │
-│  │ Groups Setup │→ │ Pipeline     │→ │ & Sanity     │             │
+│  │ Zero-to-Hero │  │ Orchestrator │  │ Validation   │             │
+│  │ Bootstrap    │→ │ Pipeline     │→ │ & Sanity     │             │
 │  └──────────────┘  └──────────────┘  └──────────────┘             │
 └────────────────────────────┬────────────────────────────────────────┘
                              │ OIDC (Workload Identity)
@@ -133,7 +172,7 @@ The ExampleCorp Infrastructure Platform is the single source of truth for provis
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-### Power BI Private Connectivity Flow
+### Power BI Connectivity
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -176,22 +215,20 @@ Result: Power BI → VNet Gateway → Private Endpoint → Storage
 ```
 azure-infra-base-code/
 ├── pipelines/
-│   ├── 00-zero-to-hero.yaml              # 🆕 Zero-to-hero bootstrap
+│   ├── 00-zero-to-hero.yaml              # Zero-to-hero bootstrap
 │   ├── azure-pipelines.yaml              # Main orchestrator
 │   ├── 03-var-groups-kve.yaml            # Variable group management
 │   ├── 90-nuke-core-net.yaml             # Teardown pipeline
 │   ├── script-validation.yaml            # CI quality gates
 │   ├── stages/
-│   │   ├── 00-variable-groups.stage.yml  # VG seeding stage
+│   │   ├── 00-var-groups.stage.yml       # VG seeding stage
 │   │   ├── 01-bootstrap.stage.yml        # Bootstrap stage
 │   │   ├── 02-vnet-dns-pe.stage.yml      # Network stage
 │   │   ├── 03-customer-storage.stage.yml # Storage stage
-│   │   ├── 04-powerbi-gateway.stage.yml  # Power BI stage
-│   │   └── 90-nuke-core-net.stage.yml    # Teardown stage
+│   │   └── 04-powerbi-gateway.stage.yml  # Power BI stage
 │   ├── templates/
 │   │   ├── oidc-sanity.yaml              # OIDC validation
-│   │   ├── steps-terraform.yml           # Terraform steps
-│   │   └── job.customer-storage.yaml     # Storage job template
+│   │   └── steps-terraform.yml           # Terraform steps
 │   └── steps/
 │       └── prepare-scripts.step.yml      # Script preparation
 ├── scripts/
@@ -201,171 +238,107 @@ azure-infra-base-code/
 │   ├── customer_storage.sh               # Storage provisioning
 │   ├── powerbi_gateway.sh                # Power BI gateway setup
 │   ├── create-oidc-connection-from-mi.sh # OIDC setup
-│   ├── cleanup-oidc-mi-connection.sh     # OIDC cleanup
-│   ├── list-powerbi-environments.sh      # Power BI helper
-│   ├── check-powerbi-gateway.sh          # Gateway validation
-│   └── README.md                         # Script documentation
+│   └── cleanup-oidc-mi-connection.sh     # OIDC cleanup
 ├── environments/
 │   ├── dev/
-│   │   ├── main.tf                       # Terraform entry point
-│   │   ├── variables.tf                  # Variable definitions
-│   │   └── backend.hcl                   # State backend config
 │   ├── stage/
 │   └── prod/
-├── WIKI/
-│   ├── 00_Overview.md                    # Platform overview
-│   ├── 01_Architecture.md                # Architecture details
-│   ├── 02_Getting_Started.md             # Onboarding guide
-│   ├── 05_Security.md                    # Security policies
-│   ├── 06_FinOps.md                      # Cost management
-│   └── 07_Troubleshooting.md             # Runbooks
-├── README.md                             # This file
-├── ZERO_TO_HERO.md                       # 🆕 Automated deployment guide
-├── Platform_Documentation.md             # Component reference
-├── SCRIPT_CLEANUP.md                     # Cleanup tracking
-└── review.md                             # Board assessment
+└── README.md                             # This file
 ```
 
 ---
 
-## Getting Started
+## Zero-to-Hero Deployment
 
-### 🚀 Zero-to-Hero Automated Deployment
+### Prerequisites
 
-**NEW: 100% Programmatic Deployment Available**
+**Required:**
+- Azure subscription with Owner or Contributor + User Access Administrator
+- Azure DevOps organization and project
+- Azure CLI installed locally
 
-The platform now supports fully automated deployment from nothing to complete infrastructure in ~25 minutes.
-
-**Quick Start:**
+**One-Time ADO Configuration:**
 ```bash
-# 1. Enable System.AccessToken in Azure DevOps (one-time)
-# Project Settings → Pipelines → Settings → Disable "Limit job authorization scope"
-
-# 2. Run zero-to-hero pipeline
-az pipelines run --name "00-zero-to-hero" \
-  --parameters SUBSCRIPTION_ID="<sub-id>" TENANT_ID="<tenant-id>"
-
-# 3. Run infrastructure pipeline
-az pipelines run --name "azure-pipelines"
+# Enable System.AccessToken in Azure DevOps
+# Project Settings → Pipelines → Settings
+# Disable: "Limit job authorization scope to current project"
 ```
 
-**See [ZERO_TO_HERO.md](ZERO_TO_HERO.md) for complete automated deployment guide.**
+### Automated Deployment
 
----
-
-### Manual Setup (Legacy)
-
-**Required Tools:**
-- Azure CLI ≥ 2.50.0
-- jq ≥ 1.6
-- Python 3.8+
-- Git
-- Azure DevOps CLI extension
-
-**Required Permissions:**
-- Azure Subscription: Contributor + User Access Administrator
-- Azure DevOps: Project Administrator
-- Entra ID: Application Administrator (for MI creation)
-
-### Step 1: Create Managed Identity & Federated Credential (Manual)
+**Step 1: Run Zero-to-Hero Pipeline**
 
 ```bash
-# Set variables
-SUBSCRIPTION_ID="<your-subscription-id>"
-TENANT_ID="<your-tenant-id>"
-ADO_ORG="ExampleCorpOps"
-ADO_PROJECT="ExampleCorp"
-SC_NAME="My-ARM-Connection-OIDC"
-
-# Create resource group
-az group create -n rg-ado-wif -l eastus
-
-# Create user-assigned managed identity
-az identity create -g rg-ado-wif -n ado-wif-mi
-
-# Get identity details
-MI_CLIENT_ID=$(az identity show -g rg-ado-wif -n ado-wif-mi --query clientId -o tsv)
-MI_PRINCIPAL_ID=$(az identity show -g rg-ado-wif -n ado-wif-mi --query principalId -o tsv)
-
-# Assign subscription-level roles
-az role assignment create \
-  --assignee-object-id $MI_PRINCIPAL_ID \
-  --role Contributor \
-  --scope /subscriptions/$SUBSCRIPTION_ID
-
-az role assignment create \
-  --assignee-object-id $MI_PRINCIPAL_ID \
-  --role "User Access Administrator" \
-  --scope /subscriptions/$SUBSCRIPTION_ID
-
-# Create federated credential
-az identity federated-credential create \
-  -g rg-ado-wif \
-  --identity-name ado-wif-mi \
-  --name ado-federated-credential \
-  --issuer "https://vstoken.dev.azure.com/<your-org-id>" \
-  --subject "sc://${ADO_ORG}/${ADO_PROJECT}/${SC_NAME}" \
-  --audiences "api://AzureADTokenExchange"
-```
-
-### Step 2: Create OIDC Service Connection (Manual)
-
-```bash
-# Run the automated script
-cd scripts/
-export RESOURCE_GROUP="rg-ado-wif"
-export MI_NAME="ado-wif-mi"
-export SC_NAME="My-ARM-Connection-OIDC"
-export ADO_ORG_URL="https://dev.azure.com/ExampleCorpOps"
-export ADO_PROJECT="ExampleCorp"
-
-./create-oidc-connection-from-mi.sh
-```
-
-### Step 3: Configure Variable Groups (Manual)
-
-```bash
-# Run variable group setup pipeline
+# Import and run the bootstrap pipeline
 az pipelines run \
-  --name "03-var-groups-kve" \
-  --organization "https://dev.azure.com/ExampleCorpOps" \
-  --project "ExampleCorp"
+  --name "00-zero-to-hero" \
+  --organization "https://dev.azure.com/YourOrg" \
+  --project "YourProject" \
+  --parameters \
+    SUBSCRIPTION_ID="<your-subscription-id>" \
+    TENANT_ID="<your-tenant-id>" \
+    ADO_ORG="YourOrg" \
+    ADO_PROJECT="YourProject" \
+    AZURE_LOCATION="eastus"
 ```
 
-This creates:
-- `vg-core-bootstrap` - Bootstrap configuration
-- `vg-core-network` - Network configuration
-- `vg-customer-<slug>` - Customer-specific settings
-- `vg-powerbi-gateway` - Power BI gateway settings (optional)
+**What This Creates:**
+- ✅ Managed Identity with RBAC roles
+- ✅ Federated Credential for OIDC
+- ✅ Service Connection (passwordless)
+- ✅ ADO Environments
+- ✅ Variable Groups with configuration
 
-### Step 4: Deploy Infrastructure (Manual)
+**Duration:** ~5-10 minutes
+
+**Step 2: Deploy Infrastructure**
 
 ```bash
-# Run main orchestrator pipeline
+# Run the main infrastructure pipeline
 az pipelines run \
   --name "azure-pipelines" \
-  --organization "https://dev.azure.com/ExampleCorpOps" \
-  --project "ExampleCorp" \
-  --variables RUN_VARS_SETUP=false
+  --organization "https://dev.azure.com/YourOrg" \
+  --project "YourProject"
 ```
 
-### Step 5: Validate Deployment (Manual)
+**What This Deploys:**
+- ✅ Bootstrap (RG, Storage, Key Vault, ACR, Log Analytics)
+- ✅ Core Network (VNet, Subnets, DNS Zones, Private Endpoints)
+- ✅ Customer Storage (ADLS Gen2 with Private Endpoints)
+- ✅ Power BI Gateway (Optional)
+
+**Duration:** ~15-20 minutes
+
+**Total Time:** ~25 minutes from zero to production
+
+### Verification
 
 ```bash
-# Run OIDC sanity check
-az pipelines run \
-  --name "sanity-check" \
-  --organization "https://dev.azure.com/ExampleCorpOps" \
-  --project "ExampleCorp"
+# Verify Managed Identity
+az identity show -g rg-ado-wif -n ado-wif-mi
+
+# Verify Service Connection
+az devops service-endpoint list \
+  --organization "https://dev.azure.com/YourOrg" \
+  --project "YourProject" \
+  --query "[?name=='My-ARM-Connection-OIDC']"
+
+# Verify Infrastructure
+az group list --query "[?starts_with(name, 'rg-example')]" -o table
+az network vnet list -g rg-example-core-net -o table
+az keyvault list -g rg-example-tfstate -o table
+
+# Run sanity check
+az pipelines run --name "sanity-check"
 ```
 
 ---
 
 ## Configuration Reference
 
-### Bootstrap Variables (vg-core-bootstrap)
+### Bootstrap Variables
 
-| Variable | Description | Example |
+| Variable | Description | Default |
 |----------|-------------|---------|
 | `STATE_RG` | Resource group for state | `rg-example-tfstate` |
 | `STATE_SA` | Storage account for Terraform state | `stexampletfstate` |
@@ -374,6 +347,7 @@ az pipelines run \
 | `KV_RETENTION_DAYS` | Soft-delete retention | `30` |
 | `KV_PUBLIC_NETWORK_ACCESS` | Public access | `Disabled` |
 | `LAW_NAME` | Log Analytics workspace | `law-example-platform` |
+| `LAW_SKU` | Log Analytics SKU | `PerGB2018` |
 | `ACR_NAME` | Container registry | `acrexampleplatform` |
 | `ACR_SKU` | Registry SKU | `Premium` |
 | `ACR_PUBLIC_NETWORK_ENABLED` | Public access | `false` |
@@ -381,9 +355,9 @@ az pipelines run \
 | `MI_NAME` | Managed identity name | `ado-wif-mi` |
 | `LOCATION` | Azure region | `eastus` |
 
-### Network Variables (vg-core-network)
+### Network Variables
 
-| Variable | Description | Example |
+| Variable | Description | Default |
 |----------|-------------|---------|
 | `NET_RG` | Network resource group | `rg-example-network` |
 | `VNET_NAME` | Virtual network name | `vnet-example-core` |
@@ -396,15 +370,27 @@ az pipelines run \
 | `Z_DFS` | DFS DNS zone | `privatelink.dfs.core.windows.net` |
 | `Z_KV` | Key Vault DNS zone | `privatelink.vaultcore.azure.net` |
 | `Z_ACR` | ACR DNS zone | `privatelink.azurecr.io` |
-| `ENABLE_PE_KV` | Enable KV private endpoint | `true` |
-| `ENABLE_PE_ACR` | Enable ACR private endpoint | `true` |
+| `ENABLE_PE_KV` | Enable KV private endpoint | `false` |
+| `ENABLE_PE_ACR` | Enable ACR private endpoint | `false` |
 
-### Power BI Gateway Variables (vg-powerbi-gateway)
+### Customer Storage Variables
 
-| Variable | Description | Example |
+| Variable | Description | Default |
 |----------|-------------|---------|
-| `ENABLE_PBI_GATEWAY` | Enable Power BI gateway | `true` |
-| `PBI_RG` | Gateway resource group | `rg-example-powerbi` |
+| `CUSTOMER_SLUG` | Customer identifier | `washington` |
+| `DATA_RG` | Data resource group | `rg-example-data-washington` |
+| `SA_NAME` | Storage account name | Auto-generated |
+| `CONTAINERS_CSV` | Container names (comma-separated) | `invoices,archive` |
+| `ENABLE_STORAGE_PE` | Enable private endpoints | `true` |
+| `LAW_RG` | Log Analytics RG | `rg-example-tfstate` |
+| `LAW_NAME` | Log Analytics workspace | `law-example-platform` |
+
+### Power BI Gateway Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `ENABLE_PBI_GATEWAY` | Enable Power BI gateway | `false` |
+| `PBI_RG` | Gateway resource group | `rg-example-analytics` |
 | `PBI_LOCATION` | Gateway location | `eastus` |
 | `PBI_GATEWAY_NAME` | Gateway resource name | `pbi-vnet-gateway` |
 | `PBI_VNET_RG` | VNet resource group | `rg-example-network` |
@@ -412,8 +398,7 @@ az pipelines run \
 | `PBI_SUBNET_NAME` | Delegated subnet | `snet-powerbi-gateway` |
 | `PBI_SUBNET_CIDR` | Subnet CIDR | `10.100.2.0/27` |
 | `PBI_DELEGATION` | Delegation service | `Microsoft.PowerPlatform/vnetaccesslinks` |
-| `PBI_ENVIRONMENT_IDS` | Environment IDs (comma-separated) | `/providers/Microsoft.PowerPlatform/...` |
-| `PBI_ENVIRONMENT_LINKS` | Admin portal URLs (comma-separated) | `https://admin.powerplatform.microsoft.com/...` |
+| `PBI_ENVIRONMENT_IDS` | Environment IDs (comma-separated) | Required |
 | `PBI_GATEWAY_API_VERSION` | API version | `2020-10-30-preview` |
 
 ---
@@ -425,8 +410,8 @@ az pipelines run \
 **Monitor Pipeline Runs:**
 ```bash
 az pipelines runs list \
-  --organization "https://dev.azure.com/ExampleCorpOps" \
-  --project "ExampleCorp" \
+  --organization "https://dev.azure.com/YourOrg" \
+  --project "YourProject" \
   --top 10
 ```
 
@@ -440,41 +425,36 @@ az acr show -n acrexampleplatform -g rg-example-tfstate
 # Network resources
 az network vnet show -g rg-example-network -n vnet-example-core
 az network private-endpoint list -g rg-example-network
+
+# Storage resources
+az storage account list -g rg-example-data-washington -o table
 ```
 
-**Validate OIDC Connection:**
+### Monitoring
+
+**View Diagnostic Logs:**
 ```bash
-az pipelines run --name "sanity-check"
+# Query Log Analytics
+az monitor log-analytics query \
+  -w <workspace-id> \
+  --analytics-query "AzureDiagnostics | where TimeGenerated > ago(1h)"
+
+# Check Key Vault audit events
+az monitor log-analytics query \
+  -w <workspace-id> \
+  --analytics-query "AzureDiagnostics | where ResourceType == 'VAULTS' and Category == 'AuditEvent'"
 ```
 
-### Troubleshooting
-
-**OIDC Authentication Failures:**
-1. Verify federated credential subject matches service connection
-2. Check MI has required RBAC roles
-3. Run `pipelines/templates/oidc-sanity.yaml` for detailed diagnostics
-
-**Network Provisioning Issues:**
-1. Verify CIDR ranges don't overlap
-2. Check subnet delegation for Power BI gateway
-3. Validate DNS zone links to VNet
-
-**Power BI Gateway Issues:**
-1. Confirm `Microsoft.PowerPlatform` provider is registered
-2. Verify subnet delegation: `Microsoft.PowerPlatform/vnetaccesslinks`
-3. Check gateway provisioning state: `scripts/check-powerbi-gateway.sh`
-4. Validate environment IDs format
-
-**Script Validation Failures:**
+**Monitor RBAC Changes:**
 ```bash
-# Run shellcheck locally
-find scripts/ -name "*.sh" -not -path "*/archive/*" -exec shellcheck {} \;
-
-# Validate syntax
-bash -n scripts/bootstrap.sh
+# Activity log for role assignments
+az monitor activity-log list \
+  --resource-group rg-example-tfstate \
+  --offset 7d \
+  --query "[?contains(operationName.value, 'roleAssignments')]"
 ```
 
-### Maintenance Tasks
+### Maintenance
 
 **Update Variable Groups:**
 ```bash
@@ -484,6 +464,12 @@ az pipelines run --name "03-var-groups-kve"
 **Rotate Credentials:**
 - No credentials to rotate (OIDC-based)
 - Review MI RBAC assignments quarterly
+
+**Update Infrastructure:**
+```bash
+# Re-run main pipeline (idempotent)
+az pipelines run --name "azure-pipelines"
+```
 
 **Cost Optimization:**
 ```bash
@@ -509,7 +495,98 @@ az pipelines run \
 
 ---
 
-## Security Best Practices
+## Troubleshooting
+
+### OIDC Issues
+
+**Problem:** OIDC authentication fails
+
+**Solution:**
+```bash
+# 1. Verify federated credential subject matches service connection
+az identity federated-credential list \
+  -g rg-ado-wif \
+  --identity-name ado-wif-mi
+
+# 2. Check MI has required RBAC roles
+az role assignment list \
+  --assignee <mi-principal-id> \
+  --scope /subscriptions/<subscription-id>
+
+# 3. Run OIDC sanity check
+az pipelines run --name "sanity-check"
+```
+
+### Network Issues
+
+**Problem:** CIDR ranges overlap
+
+**Solution:**
+```bash
+# Scripts auto-calculate non-overlapping ranges
+# Check current VNet address space
+az network vnet show \
+  -g rg-example-network \
+  -n vnet-example-core \
+  --query addressSpace.addressPrefixes
+```
+
+**Problem:** Private endpoint creation fails
+
+**Solution:**
+```bash
+# Verify subnet has private endpoint policies disabled
+az network vnet subnet show \
+  -g rg-example-network \
+  --vnet-name vnet-example-core \
+  -n snet-private-endpoints \
+  --query privateEndpointNetworkPolicies
+```
+
+### Power BI Gateway Issues
+
+**Problem:** Gateway provisioning fails
+
+**Solution:**
+```bash
+# 1. Confirm provider is registered
+az provider show \
+  --namespace Microsoft.PowerPlatform \
+  --query registrationState
+
+# 2. Verify subnet delegation
+az network vnet subnet show \
+  -g rg-example-network \
+  --vnet-name vnet-example-core \
+  -n snet-powerbi-gateway \
+  --query delegations
+
+# 3. Check gateway provisioning state
+bash scripts/check-powerbi-gateway.sh
+
+# 4. Validate environment IDs format
+# Should be: /providers/Microsoft.PowerPlatform/locations/<geo>/environments/<id>
+```
+
+### Script Issues
+
+**Problem:** Script validation fails
+
+**Solution:**
+```bash
+# Run shellcheck locally
+find scripts/ -name "*.sh" -not -path "*/archive/*" -exec shellcheck {} \;
+
+# Validate syntax
+bash -n scripts/bootstrap.sh
+
+# Check for required variables
+grep -E "^: \"\${.*:?\?.*}\"" scripts/bootstrap.sh
+```
+
+---
+
+## Security & Compliance
 
 ### Authentication & Authorization
 - ✅ Use OIDC (Workload Identity Federation) exclusively
@@ -535,49 +612,41 @@ az pipelines run \
 - ✅ Monitor RBAC changes with Activity Log alerts
 - ✅ Track pipeline execution metrics
 
+### Compliance Standards
+- **SOC 2 Type II:** Audit logging enabled on all resources
+- **GDPR:** Data residency enforced via Azure region selection
+- **HIPAA:** Encryption at rest and in transit enforced
+
 ---
 
-## Engineering Guardrails
+## Engineering Standards
 
 ### Script Standards
 - All scripts must include `set -euo pipefail`
 - Input validation required for all parameters
 - Idempotent operations with existence checks
 - Clear error messages with exit codes
+- No inline secrets or credentials
 
 ### Pipeline Standards
 - OIDC service connections only
 - Stage templates for orchestration
 - Bash scripts for implementation
 - Validation gates before deployment
+- System.AccessToken for REST API calls
 
 ### Code Quality
 - shellcheck validation on all scripts
 - Syntax validation in CI pipeline
 - Required variable checks
-- No inline secrets or credentials
+- Automated testing via script-validation.yaml
 
----
-
-## Support & Documentation
-
-### Primary Documentation
-- `README.md` - This file (architecture & operations)
-- `Platform_Documentation.md` - Component reference
-- `scripts/README.md` - OIDC setup guide
-- `WIKI/` - Detailed guides and runbooks
-
-### Engineering Board Contacts
-- Azure Architecture: architecture@example.com
-- DevOps: devops@example.com
-- Security: security@example.com
-- Automation: automation@example.com
-
-### Change Management
-- All changes require Engineering Board review
-- Follow three pillars: Security, Automation, Resilience
-- Document architectural decisions in `review.md`
-- Track improvements in GitHub Issues
+### Naming Conventions
+- Resource Groups: `rg-<purpose>-<environment>`
+- Storage Accounts: `st<purpose><environment>` (lowercase, no hyphens)
+- Key Vaults: `kv-<purpose>-<environment>`
+- Virtual Networks: `vnet-<purpose>-<environment>`
+- Subnets: `snet-<purpose>`
 
 ---
 
@@ -591,15 +660,6 @@ az pipelines run \
 | **Manual Setup** | ~45 min | 5 steps | Learning, customization |
 | **Existing Infrastructure** | ~15 min | 0 | Updates, changes |
 
-### Glossary
-- **OIDC**: OpenID Connect (Workload Identity Federation)
-- **UAMI**: User-Assigned Managed Identity
-- **PE**: Private Endpoint
-- **ADLS**: Azure Data Lake Storage
-- **ACR**: Azure Container Registry
-- **LAW**: Log Analytics Workspace
-- **Zero-to-Hero**: Fully automated deployment from nothing to production
-
 ### Pipeline Reference
 
 | Pipeline | Purpose | When to Run |
@@ -610,16 +670,37 @@ az pipelines run \
 | `script-validation.yaml` | Validate scripts | On PR/commit |
 | `90-nuke-core-net.yaml` | Teardown infrastructure | Cleanup only |
 
+### Glossary
+
+- **OIDC**: OpenID Connect (Workload Identity Federation)
+- **UAMI**: User-Assigned Managed Identity
+- **PE**: Private Endpoint
+- **ADLS**: Azure Data Lake Storage
+- **ACR**: Azure Container Registry
+- **LAW**: Log Analytics Workspace
+- **VG**: Variable Group
+- **Zero-to-Hero**: Fully automated deployment from nothing to production
+
 ### API Versions
+
 - Power BI Gateway: `2020-10-30-preview` (default)
 - Azure Resource Manager: `2021-04-01`
 - Storage Account: `2021-09-01`
 - Azure DevOps REST API: `7.1-preview.2`
 
-### Compliance
-- SOC 2 Type II: Audit logging enabled
-- GDPR: Data residency enforced
-- HIPAA: Encryption at rest and in transit
+### Support Contacts
+
+- **Azure Architecture:** architecture@example.com
+- **DevOps:** devops@example.com
+- **Security:** security@example.com
+- **Automation:** automation@example.com
+
+### Change Management
+
+- All changes require Engineering Board review
+- Follow three pillars: Security, Automation, Resilience
+- Document architectural decisions
+- Track improvements in GitHub Issues
 
 ---
 
