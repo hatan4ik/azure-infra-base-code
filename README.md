@@ -142,16 +142,16 @@ The ExampleCorp Infrastructure Platform is the single source of truth for provis
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                    Core Virtual Network                             │
-│                    CIDR: 10.100.0.0/16                              │
+│                    CIDR: 10.10.0.0/16                               │
 │                                                                     │
 │  ┌──────────────────────────────────────────────────────────────┐  │
-│  │ Workloads Subnet: 10.100.0.0/24                              │  │
+│  │ Workloads Subnet: 10.10.0.0/24                               │  │
 │  │  • Application workloads                                     │  │
 │  │  • Compute resources                                         │  │
 │  └──────────────────────────────────────────────────────────────┘  │
 │                                                                     │
 │  ┌──────────────────────────────────────────────────────────────┐  │
-│  │ Private Endpoints Subnet: 10.100.1.0/24                      │  │
+│  │ Private Endpoints Subnet: 10.10.1.0/24                       │  │
 │  │  • PE: Key Vault                                             │  │
 │  │  • PE: Storage Accounts (blob, dfs)                          │  │
 │  │  • PE: Container Registry                                    │  │
@@ -159,7 +159,7 @@ The ExampleCorp Infrastructure Platform is the single source of truth for provis
 │  └──────────────────────────────────────────────────────────────┘  │
 │                                                                     │
 │  ┌──────────────────────────────────────────────────────────────┐  │
-│  │ Power BI Gateway Subnet: 10.100.2.0/27 (Optional)           │  │
+│  │ Power BI Gateway Subnet: 10.10.3.0/27 (Optional)            │  │
 │  │  • Delegated to: Microsoft.PowerPlatform/vnetaccesslinks    │  │
 │  │  • Microsoft-managed gateway instances                       │  │
 │  └──────────────────────────────────────────────────────────────┘  │
@@ -186,7 +186,7 @@ The ExampleCorp Infrastructure Platform is the single source of truth for provis
 │              Microsoft.PowerPlatform VNet Gateway                   │
 │              (Managed by Microsoft, runs in your VNet)              │
 │                                                                     │
-│  Location: Delegated Subnet (10.100.2.0/27)                        │
+│  Location: Delegated Subnet (10.10.3.0/27)                         │
 │  Associated Environments: [Power Platform Env IDs]                 │
 └────────────────────────────┬────────────────────────────────────────┘
                              │
@@ -194,7 +194,7 @@ The ExampleCorp Infrastructure Platform is the single source of truth for provis
                              ↓
 ┌─────────────────────────────────────────────────────────────────────┐
 │              Private Endpoint (Storage Account)                     │
-│              IP: 10.100.1.x (from PE Subnet)                        │
+│              IP: 10.10.1.x (from PE Subnet)                         │
 │                                                                     │
 │  ┌──────────────────────────────────────────────────────────────┐  │
 │  │ Customer ADLS Gen2 Storage                                   │  │
@@ -243,7 +243,11 @@ azure-infra-base-code/
 │   ├── dev/
 │   ├── stage/
 │   └── prod/
-└── README.md                             # This file
+├── WIKI/                                 # Legacy documentation (archived)
+├── cloud-init/
+│   └── agents.yaml                       # VMSS agent bootstrap
+├── README.md                             # This file
+└── review.md                             # Board assessment
 ```
 
 ---
@@ -359,13 +363,13 @@ az pipelines run --name "sanity-check"
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `NET_RG` | Network resource group | `rg-example-network` |
+| `NET_RG` | Network resource group | `rg-example-core-net` |
 | `VNET_NAME` | Virtual network name | `vnet-example-core` |
-| `VNET_CIDR` | VNet address space | `10.100.0.0/16` |
+| `VNET_CIDR` | VNet address space | `10.10.0.0/16` |
 | `SNET_WORKLOADS_NAME` | Workloads subnet | `snet-workloads` |
-| `SNET_WORKLOADS_CIDR` | Workloads CIDR | `10.100.0.0/24` |
+| `SNET_WORKLOADS_CIDR` | Workloads CIDR | `10.10.0.0/24` |
 | `SNET_PE_NAME` | Private endpoints subnet | `snet-private-endpoints` |
-| `SNET_PE_CIDR` | PE subnet CIDR | `10.100.1.0/24` |
+| `SNET_PE_CIDR` | PE subnet CIDR | `10.10.1.0/24` |
 | `Z_BLOB` | Blob DNS zone | `privatelink.blob.core.windows.net` |
 | `Z_DFS` | DFS DNS zone | `privatelink.dfs.core.windows.net` |
 | `Z_KV` | Key Vault DNS zone | `privatelink.vaultcore.azure.net` |
@@ -393,10 +397,10 @@ az pipelines run --name "sanity-check"
 | `PBI_RG` | Gateway resource group | `rg-example-analytics` |
 | `PBI_LOCATION` | Gateway location | `eastus` |
 | `PBI_GATEWAY_NAME` | Gateway resource name | `pbi-vnet-gateway` |
-| `PBI_VNET_RG` | VNet resource group | `rg-example-network` |
+| `PBI_VNET_RG` | VNet resource group | `rg-example-core-net` |
 | `PBI_VNET_NAME` | VNet name | `vnet-example-core` |
 | `PBI_SUBNET_NAME` | Delegated subnet | `snet-powerbi-gateway` |
-| `PBI_SUBNET_CIDR` | Subnet CIDR | `10.100.2.0/27` |
+| `PBI_SUBNET_CIDR` | Subnet CIDR | `10.10.3.0/27` |
 | `PBI_DELEGATION` | Delegation service | `Microsoft.PowerPlatform/vnetaccesslinks` |
 | `PBI_ENVIRONMENT_IDS` | Environment IDs (comma-separated) | Required |
 | `PBI_GATEWAY_API_VERSION` | API version | `2020-10-30-preview` |
@@ -423,8 +427,8 @@ az keyvault show -n kv-example-platform -g rg-example-tfstate
 az acr show -n acrexampleplatform -g rg-example-tfstate
 
 # Network resources
-az network vnet show -g rg-example-network -n vnet-example-core
-az network private-endpoint list -g rg-example-network
+az network vnet show -g rg-example-core-net -n vnet-example-core
+az network private-endpoint list -g rg-example-core-net
 
 # Storage resources
 az storage account list -g rg-example-data-washington -o table
@@ -526,7 +530,7 @@ az pipelines run --name "sanity-check"
 # Scripts auto-calculate non-overlapping ranges
 # Check current VNet address space
 az network vnet show \
-  -g rg-example-network \
+  -g rg-example-core-net \
   -n vnet-example-core \
   --query addressSpace.addressPrefixes
 ```
@@ -537,7 +541,7 @@ az network vnet show \
 ```bash
 # Verify subnet has private endpoint policies disabled
 az network vnet subnet show \
-  -g rg-example-network \
+  -g rg-example-core-net \
   --vnet-name vnet-example-core \
   -n snet-private-endpoints \
   --query privateEndpointNetworkPolicies
@@ -556,7 +560,7 @@ az provider show \
 
 # 2. Verify subnet delegation
 az network vnet subnet show \
-  -g rg-example-network \
+  -g rg-example-core-net \
   --vnet-name vnet-example-core \
   -n snet-powerbi-gateway \
   --query delegations
