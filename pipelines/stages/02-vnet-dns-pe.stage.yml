@@ -5,8 +5,7 @@ parameters:
   variableGroups: []
   scriptsDir: ''
 
-stages:
-- stage: CoreNetwork
+stage: CoreNetwork
   displayName: "02 • Core VNet + DNS (+ optional PEs)"
   variables:
   - ${{ each vg in parameters.variableGroups }}:

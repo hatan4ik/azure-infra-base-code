@@ -5,8 +5,7 @@ parameters:
   variableGroups: []
   scriptsDir: ''
 
-stages:
-- stage: CustomerStorage
+stage: CustomerStorage
   displayName: "03 • Per-customer storage (ADLS + containers + diag + RBAC + PE)"
   variables:
   - ${{ each vg in parameters.variableGroups }}:

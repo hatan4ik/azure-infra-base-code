@@ -4,8 +4,7 @@ parameters:
   serviceConnection: ''
   scriptsDir: ''
 
-stages:
-- stage: VariableGroups
+stage: VariableGroups
   displayName: "00 • Variable Groups (optional)"
   jobs:
   - deployment: VGsDeploy

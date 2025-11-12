@@ -5,8 +5,7 @@ parameters:
   variableGroups: []
   scriptsDir: ''
 
-stages:
-- stage: Bootstrap
+stage: Bootstrap
   displayName: "01 • Bootstrap"
   variables:
   - ${{ each vg in parameters.variableGroups }}:

@@ -1,0 +1,354 @@
+# 00-zero-to-hero.yaml
+# Complete automated setup from nothing to full infrastructure
+# Run this ONCE to bootstrap everything programmatically
+
+trigger: none
+pr: none
+
+parameters:
+- name: SUBSCRIPTION_ID
+  type: string
+  displayName: Azure Subscription ID
+- name: TENANT_ID
+  type: string
+  displayName: Azure Tenant ID
+- name: ADO_ORG
+  type: string
+  default: ExampleCorpOps
+  displayName: Azure DevOps Organization Name
+- name: ADO_PROJECT
+  type: string
+  default: ExampleCorp
+  displayName: Azure DevOps Project Name
+- name: AZURE_LOCATION
+  type: string
+  default: eastus
+  displayName: Azure Region
+
+variables:
+  MI_RG: rg-ado-wif
+  MI_NAME: ado-wif-mi
+  SC_NAME: My-ARM-Connection-OIDC
+  ADO_ORG_URL: https://dev.azure.com/${{ parameters.ADO_ORG }}
+
+stages:
+- stage: CreateManagedIdentity
+  displayName: 01 • Create Managed Identity & RBAC
+  jobs:
+  - job: SetupMI
+    displayName: Create MI and assign roles
+    pool:
+      vmImage: ubuntu-latest
+    steps:
+    - task: AzureCLI@2
+      displayName: Create MI and assign subscription roles
+      inputs:
+        azureSubscription: $(System.TeamProject)
+        scriptType: bash
+        scriptLocation: inlineScript
+        addSpnToEnvironment: true
+        inlineScript: |
+          set -euo pipefail
+          
+          SUB_ID="${{ parameters.SUBSCRIPTION_ID }}"
+          TENANT_ID="${{ parameters.TENANT_ID }}"
+          LOCATION="${{ parameters.AZURE_LOCATION }}"
+          
+          echo "Creating resource group $(MI_RG)..."
+          az group create -n $(MI_RG) -l $LOCATION -o none
+          
+          echo "Creating managed identity $(MI_NAME)..."
+          az identity create -g $(MI_RG) -n $(MI_NAME) -l $LOCATION -o none
+          
+          MI_PRINCIPAL_ID=$(az identity show -g $(MI_RG) -n $(MI_NAME) --query principalId -o tsv)
+          MI_CLIENT_ID=$(az identity show -g $(MI_RG) -n $(MI_NAME) --query clientId -o tsv)
+          
+          echo "Assigning Contributor role..."
+          az role assignment create \
+            --assignee-object-id $MI_PRINCIPAL_ID \
+            --role Contributor \
+            --scope /subscriptions/$SUB_ID \
+            -o none
+          
+          echo "Assigning User Access Administrator role..."
+          az role assignment create \
+            --assignee-object-id $MI_PRINCIPAL_ID \
+            --role "User Access Administrator" \
+            --scope /subscriptions/$SUB_ID \
+            -o none
+          
+          echo "##vso[task.setvariable variable=MI_CLIENT_ID;isOutput=true]$MI_CLIENT_ID"
+          echo "##vso[task.setvariable variable=MI_PRINCIPAL_ID;isOutput=true]$MI_PRINCIPAL_ID"
+          echo "✓ Managed Identity created and configured"
+      name: miSetup
+
+- stage: CreateFederatedCredential
+  displayName: 02 • Create Federated Credential
+  dependsOn: CreateManagedIdentity
+  jobs:
+  - job: SetupFedCred
+    displayName: Create federated credential for OIDC
+    pool:
+      vmImage: ubuntu-latest
+    steps:
+    - task: AzureCLI@2
+      displayName: Create federated credential
+      inputs:
+        azureSubscription: $(System.TeamProject)
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          set -euo pipefail
+          
+          # Get organization ID
+          ORG_ID=$(az rest --method get \
+            --url "https://dev.azure.com/${{ parameters.ADO_ORG }}/_apis/connectionData" \
+            --query "authenticatedUser.subjectDescriptor" -o tsv | cut -d. -f2)
+          
+          ISSUER="https://vstoken.dev.azure.com/${ORG_ID}"
+          SUBJECT="sc://${{ parameters.ADO_ORG }}/${{ parameters.ADO_PROJECT }}/$(SC_NAME)"
+          
+          echo "Creating federated credential..."
+          echo "  Issuer: $ISSUER"
+          echo "  Subject: $SUBJECT"
+          
+          az identity federated-credential create \
+            -g $(MI_RG) \
+            --identity-name $(MI_NAME) \
+            --name ado-federated-credential \
+            --issuer "$ISSUER" \
+            --subject "$SUBJECT" \
+            --audiences "api://AzureADTokenExchange" \
+            -o none || echo "Credential may already exist"
+          
+          echo "✓ Federated credential configured"
+
+- stage: CreateServiceConnection
+  displayName: 03 • Create OIDC Service Connection
+  dependsOn: CreateFederatedCredential
+  jobs:
+  - job: SetupSC
+    displayName: Create service connection via REST API
+    pool:
+      vmImage: ubuntu-latest
+    steps:
+    - checkout: self
+    - task: AzureCLI@2
+      displayName: Create OIDC service connection
+      env:
+        SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+        AZURE_DEVOPS_EXT_PAT: $(System.AccessToken)
+      inputs:
+        azureSubscription: $(System.TeamProject)
+        scriptType: bash
+        scriptLocation: inlineScript
+        inlineScript: |
+          set -euo pipefail
+          
+          export RESOURCE_GROUP=$(MI_RG)
+          export MI_NAME=$(MI_NAME)
+          export SC_NAME=$(SC_NAME)
+          export ADO_ORG_URL=$(ADO_ORG_URL)
+          export ADO_PROJECT=${{ parameters.ADO_PROJECT }}
+          export TARGET_SUBSCRIPTION=${{ parameters.SUBSCRIPTION_ID }}
+          
+          bash scripts/create-oidc-connection-from-mi.sh
+
+- stage: CreateEnvironments
+  displayName: 04 • Create ADO Environments
+  dependsOn: CreateServiceConnection
+  jobs:
+  - job: SetupEnvs
+    displayName: Create deployment environments
+    pool:
+      vmImage: ubuntu-latest
+    steps:
+    - task: Bash@3
+      displayName: Create environments via REST API
+      env:
+        SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+      inputs:
+        targetType: inline
+        script: |
+          set -euo pipefail
+          
+          AUTH="Authorization: Bearer ${SYSTEM_ACCESSTOKEN}"
+          CT="Content-Type: application/json"
+          ORG_URL=$(ADO_ORG_URL)
+          PROJECT=${{ parameters.ADO_PROJECT }}
+          
+          create_env() {
+            local name=$1
+            echo "Creating environment: $name"
+            
+            body=$(jq -n --arg name "$name" '{name: $name, description: "Auto-created by zero-to-hero pipeline"}')
+            
+            curl -sS -f -X POST -H "$AUTH" -H "$CT" \
+              -d "$body" \
+              "${ORG_URL}/${PROJECT}/_apis/distributedtask/environments?api-version=7.1-preview.1" \
+              >/dev/null || echo "  (may already exist)"
+          }
+          
+          create_env "env-vg-setup"
+          create_env "env-infra-bootstrap"
+          create_env "env-core-network"
+          create_env "env-customer-storage"
+          
+          echo "✓ Environments created"
+
+- stage: CreateVariableGroups
+  displayName: 05 • Create Variable Groups
+  dependsOn: CreateEnvironments
+  jobs:
+  - job: SetupVGs
+    displayName: Create all variable groups
+    pool:
+      vmImage: ubuntu-latest
+    steps:
+    - task: Bash@3
+      displayName: Run variable group creation
+      env:
+        SYSTEM_ACCESSTOKEN: $(System.AccessToken)
+      inputs:
+        targetType: inline
+        script: |
+          set -euo pipefail
+          
+          # Run the existing variable group pipeline inline
+          AUTH="Authorization: Bearer ${SYSTEM_ACCESSTOKEN}"
+          CT="Content-Type: application/json"
+          ORG_URL=$(ADO_ORG_URL)
+          PROJECT=${{ parameters.ADO_PROJECT }}
+          
+          # Get project ID
+          proj_json=$(curl -sS -f -H "$AUTH" -H "$CT" \
+            "${ORG_URL}/_apis/projects/${PROJECT}?api-version=7.1")
+          proj_id=$(echo "$proj_json" | jq -r '.id')
+          
+          # Create bootstrap VG
+          boot_vars=$(jq -n '{
+            "LOCATION": {"value": "${{ parameters.AZURE_LOCATION }}", "isSecret": false},
+            "STATE_RG": {"value": "rg-example-tfstate", "isSecret": false},
+            "STATE_SA": {"value": "stexampletfstate", "isSecret": false},
+            "STATE_CONTAINER": {"value": "tfstate", "isSecret": false},
+            "KV_NAME": {"value": "kv-example-platform", "isSecret": false},
+            "KV_RETENTION_DAYS": {"value": "30", "isSecret": false},
+            "KV_PUBLIC_NETWORK_ACCESS": {"value": "Disabled", "isSecret": false},
+            "LAW_NAME": {"value": "law-example-platform", "isSecret": false},
+            "LAW_SKU": {"value": "PerGB2018", "isSecret": false},
+            "ACR_NAME": {"value": "acrexampleplatform", "isSecret": false},
+            "ACR_SKU": {"value": "Premium", "isSecret": false},
+            "ACR_PUBLIC_NETWORK_ENABLED": {"value": "false", "isSecret": false},
+            "MI_RESOURCE_GROUP": {"value": "$(MI_RG)", "isSecret": false},
+            "MI_NAME": {"value": "$(MI_NAME)", "isSecret": false},
+            "TAG_BusinessUnit": {"value": "core", "isSecret": false},
+            "TAG_Environment": {"value": "prod", "isSecret": false},
+            "TAG_Owner": {"value": "platform-team", "isSecret": false}
+          }')
+          
+          body=$(jq -n \
+            --arg name "vg-core-bootstrap" \
+            --arg proj_id "$proj_id" \
+            --arg proj_name "$PROJECT" \
+            --argjson vars "$boot_vars" \
+            '{type: "Vsts", name: $name, description: "Bootstrap variables", authorized: true, variables: $vars, variableGroupProjectReferences: [{projectReference: {id: $proj_id, name: $proj_name}, name: $name}]}')
+          
+          curl -sS -f -X POST -H "$AUTH" -H "$CT" -d "$body" \
+            "${ORG_URL}/${PROJECT}/_apis/distributedtask/variablegroups?api-version=7.1-preview.2" \
+            >/dev/null || echo "vg-core-bootstrap may exist"
+          
+          # Create network VG
+          net_vars=$(jq -n '{
+            "LOCATION": {"value": "${{ parameters.AZURE_LOCATION }}", "isSecret": false},
+            "NET_RG": {"value": "rg-example-core-net", "isSecret": false},
+            "VNET_NAME": {"value": "vnet-example-core", "isSecret": false},
+            "VNET_CIDR": {"value": "10.10.0.0/16", "isSecret": false},
+            "SNET_WORKLOADS_NAME": {"value": "snet-workloads", "isSecret": false},
+            "SNET_WORKLOADS_CIDR": {"value": "10.10.0.0/24", "isSecret": false},
+            "SNET_PE_NAME": {"value": "snet-private-endpoints", "isSecret": false},
+            "SNET_PE_CIDR": {"value": "10.10.1.0/24", "isSecret": false},
+            "Z_BLOB": {"value": "privatelink.blob.core.windows.net", "isSecret": false},
+            "Z_DFS": {"value": "privatelink.dfs.core.windows.net", "isSecret": false},
+            "Z_KV": {"value": "privatelink.vaultcore.azure.net", "isSecret": false},
+            "Z_ACR": {"value": "privatelink.azurecr.io", "isSecret": false},
+            "ENABLE_PE_KV": {"value": "false", "isSecret": false},
+            "ENABLE_PE_ACR": {"value": "false", "isSecret": false},
+            "KV_RG": {"value": "rg-example-tfstate", "isSecret": false},
+            "KV_NAME": {"value": "kv-example-platform", "isSecret": false},
+            "ACR_RG": {"value": "rg-example-tfstate", "isSecret": false},
+            "ACR_NAME": {"value": "acrexampleplatform", "isSecret": false}
+          }')
+          
+          body=$(jq -n \
+            --arg name "vg-core-network" \
+            --arg proj_id "$proj_id" \
+            --arg proj_name "$PROJECT" \
+            --argjson vars "$net_vars" \
+            '{type: "Vsts", name: $name, description: "Network variables", authorized: true, variables: $vars, variableGroupProjectReferences: [{projectReference: {id: $proj_id, name: $proj_name}, name: $name}]}')
+          
+          curl -sS -f -X POST -H "$AUTH" -H "$CT" -d "$body" \
+            "${ORG_URL}/${PROJECT}/_apis/distributedtask/variablegroups?api-version=7.1-preview.2" \
+            >/dev/null || echo "vg-core-network may exist"
+          
+          # Create customer VG
+          cust_vars=$(jq -n '{
+            "CUSTOMER_SLUG": {"value": "washington", "isSecret": false},
+            "DATA_RG": {"value": "rg-example-data-washington", "isSecret": false},
+            "SA_NAME": {"value": "", "isSecret": false},
+            "CONTAINERS_CSV": {"value": "invoices,archive", "isSecret": false},
+            "LOCATION": {"value": "${{ parameters.AZURE_LOCATION }}", "isSecret": false},
+            "LAW_RG": {"value": "rg-example-tfstate", "isSecret": false},
+            "LAW_NAME": {"value": "law-example-platform", "isSecret": false},
+            "MI_RESOURCE_GROUP": {"value": "$(MI_RG)", "isSecret": false},
+            "MI_NAME": {"value": "$(MI_NAME)", "isSecret": false},
+            "ENABLE_STORAGE_PE": {"value": "true", "isSecret": false},
+            "NET_RG": {"value": "rg-example-core-net", "isSecret": false},
+            "VNET_NAME": {"value": "vnet-example-core", "isSecret": false},
+            "SNET_PE_NAME": {"value": "snet-private-endpoints", "isSecret": false},
+            "Z_BLOB": {"value": "privatelink.blob.core.windows.net", "isSecret": false},
+            "Z_DFS": {"value": "privatelink.dfs.core.windows.net", "isSecret": false}
+          }')
+          
+          body=$(jq -n \
+            --arg name "vg-customer-washington" \
+            --arg proj_id "$proj_id" \
+            --arg proj_name "$PROJECT" \
+            --argjson vars "$cust_vars" \
+            '{type: "Vsts", name: $name, description: "Customer storage variables", authorized: true, variables: $vars, variableGroupProjectReferences: [{projectReference: {id: $proj_id, name: $proj_name}, name: $name}]}')
+          
+          curl -sS -f -X POST -H "$AUTH" -H "$CT" -d "$body" \
+            "${ORG_URL}/${PROJECT}/_apis/distributedtask/variablegroups?api-version=7.1-preview.2" \
+            >/dev/null || echo "vg-customer-washington may exist"
+          
+          echo "✓ Variable groups created"
+
+- stage: Summary
+  displayName: 06 • Setup Complete
+  dependsOn: CreateVariableGroups
+  jobs:
+  - job: ShowSummary
+    displayName: Display setup summary
+    pool:
+      vmImage: ubuntu-latest
+    steps:
+    - task: Bash@3
+      displayName: Setup summary
+      inputs:
+        targetType: inline
+        script: |
+          echo "=========================================="
+          echo "Zero-to-Hero Setup Complete!"
+          echo "=========================================="
+          echo ""
+          echo "Created Resources:"
+          echo "  ✓ Managed Identity: $(MI_NAME) in $(MI_RG)"
+          echo "  ✓ Federated Credential for OIDC"
+          echo "  ✓ Service Connection: $(SC_NAME)"
+          echo "  ✓ ADO Environments: env-vg-setup, env-infra-bootstrap, env-core-network, env-customer-storage"
+          echo "  ✓ Variable Groups: vg-core-bootstrap, vg-core-network, vg-customer-washington"
+          echo ""
+          echo "Next Steps:"
+          echo "  1. Run pipeline: azure-pipelines.yaml"
+          echo "  2. Infrastructure will be deployed automatically"
+          echo ""
+          echo "=========================================="
