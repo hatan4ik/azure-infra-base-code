@@ -1,0 +1,14 @@
+# Azure Configuration
+subscription_id = "00000000-0000-0000-0000-000000000000"
+tenant_id       = "00000000-0000-0000-0000-000000000000"
+location        = "eastus"
+
+# OIDC Configuration
+oidc_issuer  = "https://vstoken.dev.azure.com/00000000-0000-0000-0000-000000000000"
+oidc_subject = "sc://ExampleCorpOps/ExampleCorp/My-ARM-Connection-OIDC"
+
+# Power BI Gateway (Optional)
+enable_powerbi_gateway = false
+powerbi_environment_ids = [
+  # "/providers/Microsoft.PowerPlatform/locations/unitedstates/environments/Default-00000000-0000-0000-0000-000000000000"
+]

@@ -214,6 +214,18 @@ Result: Power BI → VNet Gateway → Private Endpoint → Storage
 
 ```
 azure-infra-base-code/
+├── terraform/                            # Terraform implementation (alternative)
+│   ├── modules/
+│   │   ├── managed-identity/             # OIDC MI module
+│   │   ├── bootstrap/                    # Core infrastructure module
+│   │   ├── network/                      # Network module
+│   │   ├── storage/                      # Storage module
+│   │   └── powerbi-gateway/              # Power BI gateway module
+│   ├── environments/
+│   │   ├── dev/
+│   │   ├── stage/
+│   │   └── prod/
+│   └── README.md                         # Terraform documentation
 ├── pipelines/
 │   ├── 00-zero-to-hero.yaml              # Zero-to-hero bootstrap
 │   ├── azure-pipelines.yaml              # Main orchestrator
@@ -314,6 +326,28 @@ az pipelines run \
 **Duration:** ~15-20 minutes
 
 **Total Time:** ~25 minutes from zero to production
+
+### Alternative: Terraform Deployment
+
+For teams preferring Infrastructure as Code with state management:
+
+```bash
+# Navigate to Terraform environment
+cd terraform/environments/dev
+
+# Initialize with backend
+terraform init \
+  -backend-config="resource_group_name=rg-tfstate-backend" \
+  -backend-config="storage_account_name=sttfstatebackend" \
+  -backend-config="container_name=tfstate" \
+  -backend-config="key=dev.tfstate"
+
+# Plan and apply
+terraform plan -out=tfplan
+terraform apply tfplan
+```
+
+**See [terraform/README.md](terraform/README.md) for complete Terraform documentation.**
 
 ### Verification
 
@@ -660,9 +694,23 @@ grep -E "^: \"\${.*:?\?.*}\"" scripts/bootstrap.sh
 
 | Method | Time | Manual Steps | Use Case |
 |--------|------|--------------|----------|
-| **Zero-to-Hero** | ~25 min | 1 (enable token) | New deployments, automation |
+| **Zero-to-Hero (Azure CLI)** | ~25 min | 1 (enable token) | New deployments, automation |
+| **Terraform** | ~30 min | 2 (backend + init) | IaC, state management, drift detection |
 | **Manual Setup** | ~45 min | 5 steps | Learning, customization |
 | **Existing Infrastructure** | ~15 min | 0 | Updates, changes |
+
+### Implementation Comparison
+
+| Feature | Azure CLI (Primary) | Terraform (Alternative) |
+|---------|---------------------|-------------------------|
+| **Approach** | Bash scripts | HCL modules |
+| **State** | Stateless | Stateful (tfstate) |
+| **Idempotency** | Manual checks | Built-in |
+| **Modularity** | Script functions | Native modules |
+| **Drift Detection** | Manual | `terraform plan` |
+| **Speed** | Faster | Moderate |
+| **Learning Curve** | Low | Moderate |
+| **Best For** | Quick deployments, CI/CD | Complex infrastructure, teams familiar with Terraform |
 
 ### Pipeline Reference
 
