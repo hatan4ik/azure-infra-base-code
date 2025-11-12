@@ -115,8 +115,36 @@ az rest --method put \
   --body "${payload}" >/dev/null
 
 echo ">> Confirming provisioning state"
-status="$(az rest --method get \
-  --url "https://management.azure.com${RESOURCE_ID}?api-version=${API_VERSION}" \
-  --query "properties.provisioningState" -o tsv 2>/dev/null || true)"
-
-echo "✓ Power BI VNet gateway ensured (provisioningState=${status:-unknown})."
+# Poll for completion with timeout
+max_attempts=30
+attempt=1
+while [[ $attempt -le $max_attempts ]]; do
+  status="$(az rest --method get \
+    --url "https://management.azure.com${RESOURCE_ID}?api-version=${API_VERSION}" \
+    --query "properties.provisioningState" -o tsv 2>/dev/null || echo "Unknown")"
+  
+  case "$status" in
+    "Succeeded")
+      echo "✓ Power BI VNet gateway provisioned successfully"
+      exit 0
+      ;;
+    "Failed")
+      echo "ERROR: Power BI VNet gateway provisioning failed" >&2
+      exit 1
+      ;;
+    "Creating"|"Updating"|"InProgress")
+      echo "   - Provisioning in progress (attempt $attempt/$max_attempts): $status"
+      ;;
+    *)
+      echo "   - Unknown state (attempt $attempt/$max_attempts): $status"
+      ;;
+  esac
+  
+  if [[ $attempt -eq $max_attempts ]]; then
+    echo "ERROR: Timeout waiting for Power BI VNet gateway provisioning (final state: $status)" >&2
+    exit 1
+  fi
+  
+  sleep 30
+  ((attempt++))
+done

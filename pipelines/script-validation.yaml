@@ -1,0 +1,81 @@
+trigger:
+  branches:
+    include: [ main, develop ]
+  paths:
+    include: [ scripts/* ]
+
+pr:
+  branches:
+    include: [ main ]
+  paths:
+    include: [ scripts/* ]
+
+pool:
+  vmImage: ubuntu-latest
+
+stages:
+- stage: ScriptValidation
+  displayName: Script Quality Gates
+  jobs:
+  - job: ShellCheck
+    displayName: Shell Script Linting
+    steps:
+    - task: Bash@3
+      displayName: Install shellcheck
+      inputs:
+        targetType: inline
+        script: |
+          sudo apt-get update -y
+          sudo apt-get install -y shellcheck
+    
+    - task: Bash@3
+      displayName: Run shellcheck on all scripts
+      inputs:
+        targetType: inline
+        script: |
+          set -euo pipefail
+          echo "Running shellcheck on all .sh files..."
+          find scripts/ -name "*.sh" -not -path "*/archive/*" | while read -r script; do
+            echo "Checking: $script"
+            shellcheck "$script" || exit 1
+          done
+          echo "✓ All scripts passed shellcheck"
+
+  - job: ScriptSyntax
+    displayName: Bash Syntax Validation
+    steps:
+    - task: Bash@3
+      displayName: Validate bash syntax
+      inputs:
+        targetType: inline
+        script: |
+          set -euo pipefail
+          echo "Validating bash syntax..."
+          find scripts/ -name "*.sh" -not -path "*/archive/*" | while read -r script; do
+            echo "Syntax check: $script"
+            bash -n "$script" || { echo "ERROR: Syntax error in $script"; exit 1; }
+          done
+          echo "✓ All scripts have valid syntax"
+
+  - job: RequiredVariables
+    displayName: Required Variables Check
+    steps:
+    - task: Bash@3
+      displayName: Check for required variable validation
+      inputs:
+        targetType: inline
+        script: |
+          set -euo pipefail
+          echo "Checking for input validation in core scripts..."
+          
+          core_scripts=("bootstrap.sh" "core_network.sh" "vnet_dns_pe.sh" "customer_storage.sh")
+          
+          for script in "${core_scripts[@]}"; do
+            if [[ -f "scripts/$script" ]]; then
+              if grep -q "validate_required_vars\|missing.*variables" "scripts/$script"; then
+                echo "✓ $script has input validation"
+              else
+                echo "⚠️  $script missing input validation"
+              fi
+            fi
+          done

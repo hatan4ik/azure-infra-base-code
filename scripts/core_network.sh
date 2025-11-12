@@ -1,8 +1,27 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-command -v jq >/dev/null 2>&1 || { sudo apt-get update -y && sudo apt-get install -y jq; }
-command -v python3 >/dev/null 2>&1 || { sudo apt-get update -y && sudo apt-get install -y python3-minimal; }
+# ========= Input validation =========
+validate_required_vars() {
+  local missing=()
+  for var in NET_RG VNET_NAME VNET_CIDR SNET_WORKLOADS_NAME SNET_WORKLOADS_CIDR SNET_PE_NAME SNET_PE_CIDR LOCATION; do
+    [[ -n "${!var:-}" ]] || missing+=("$var")
+  done
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    echo "ERROR: Missing required variables: ${missing[*]}" >&2
+    exit 1
+  fi
+}
+
+# ========= Ensure dependencies =========
+ensure_dependencies() {
+  command -v jq >/dev/null 2>&1 || { sudo apt-get update -y && sudo apt-get install -y jq; }
+  command -v python3 >/dev/null 2>&1 || { sudo apt-get update -y && sudo apt-get install -y python3-minimal; }
+  command -v az >/dev/null 2>&1 || { echo "ERROR: Azure CLI not found" >&2; exit 1; }
+}
+
+validate_required_vars
+ensure_dependencies
 
 SUB_ID="$(az account show --query id -o tsv)"
 

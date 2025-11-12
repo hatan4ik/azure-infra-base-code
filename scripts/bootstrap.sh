@@ -1,8 +1,26 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# ensure jq
-command -v jq >/dev/null 2>&1 || { sudo apt-get update -y && sudo apt-get install -y jq; }
+# ========= Input validation =========
+validate_required_vars() {
+  local missing=()
+  for var in STATE_RG STATE_SA STATE_CONTAINER KV_NAME LAW_NAME ACR_NAME LOCATION; do
+    [[ -n "${!var:-}" ]] || missing+=("$var")
+  done
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    echo "ERROR: Missing required variables: ${missing[*]}" >&2
+    exit 1
+  fi
+}
+
+# ========= Ensure dependencies =========
+ensure_dependencies() {
+  command -v jq >/dev/null 2>&1 || { sudo apt-get update -y && sudo apt-get install -y jq; }
+  command -v az >/dev/null 2>&1 || { echo "ERROR: Azure CLI not found" >&2; exit 1; }
+}
+
+validate_required_vars
+ensure_dependencies
 
 echo ">> Using subscription:"
 az account show --query "{id:id,name:name,tenantId:tenantId}" -o tsv | awk '{printf "   - %s (tenant %s)\n",$2,$3}'
