@@ -349,6 +349,25 @@ terraform apply tfplan
 
 **See [terraform/README.md](terraform/README.md) for complete Terraform documentation.**
 
+### Configuration Validation
+
+**Before deploying, validate your configuration:**
+
+```bash
+# Check for placeholder values
+./scripts/validate-config.sh
+
+# Replace placeholders interactively
+./scripts/replace-placeholders.sh
+```
+
+**What gets validated:**
+- Organization and project names
+- Subscription and tenant IDs
+- Resource naming conventions
+- Power BI environment IDs
+- Dummy/example values
+
 ### Verification
 
 ```bash
@@ -678,6 +697,28 @@ grep -E "^: \"\${.*:?\?.*}\"" scripts/bootstrap.sh
 - Syntax validation in CI pipeline
 - Required variable checks
 - Automated testing via script-validation.yaml
+
+### Testing Standards
+- Unit tests for all bash scripts (Bats framework)
+- Integration tests for Terraform modules
+- Configuration validation before deployment
+- CI/CD pipeline includes all test suites
+- Tests run on every PR and commit
+
+**Run tests locally:**
+```bash
+# Run all tests
+./tests/run-all-tests.sh
+
+# Run unit tests only
+bats tests/unit/*.bats
+
+# Run Terraform validation
+bash tests/integration/test_terraform.sh
+
+# Validate configuration
+bash scripts/validate-config.sh
+```
 
 ### Naming Conventions
 - Resource Groups: `rg-<purpose>-<environment>`
