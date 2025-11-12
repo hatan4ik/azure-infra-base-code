@@ -176,6 +176,7 @@ Result: Power BI → VNet Gateway → Private Endpoint → Storage
 ```
 azure-infra-base-code/
 ├── pipelines/
+│   ├── 00-zero-to-hero.yaml              # 🆕 Zero-to-hero bootstrap
 │   ├── azure-pipelines.yaml              # Main orchestrator
 │   ├── 03-var-groups-kve.yaml            # Variable group management
 │   ├── 90-nuke-core-net.yaml             # Teardown pipeline
@@ -219,6 +220,7 @@ azure-infra-base-code/
 │   ├── 06_FinOps.md                      # Cost management
 │   └── 07_Troubleshooting.md             # Runbooks
 ├── README.md                             # This file
+├── ZERO_TO_HERO.md                       # 🆕 Automated deployment guide
 ├── Platform_Documentation.md             # Component reference
 ├── SCRIPT_CLEANUP.md                     # Cleanup tracking
 └── review.md                             # Board assessment
@@ -228,7 +230,30 @@ azure-infra-base-code/
 
 ## Getting Started
 
-### Prerequisites
+### 🚀 Zero-to-Hero Automated Deployment
+
+**NEW: 100% Programmatic Deployment Available**
+
+The platform now supports fully automated deployment from nothing to complete infrastructure in ~25 minutes.
+
+**Quick Start:**
+```bash
+# 1. Enable System.AccessToken in Azure DevOps (one-time)
+# Project Settings → Pipelines → Settings → Disable "Limit job authorization scope"
+
+# 2. Run zero-to-hero pipeline
+az pipelines run --name "00-zero-to-hero" \
+  --parameters SUBSCRIPTION_ID="<sub-id>" TENANT_ID="<tenant-id>"
+
+# 3. Run infrastructure pipeline
+az pipelines run --name "azure-pipelines"
+```
+
+**See [ZERO_TO_HERO.md](ZERO_TO_HERO.md) for complete automated deployment guide.**
+
+---
+
+### Manual Setup (Legacy)
 
 **Required Tools:**
 - Azure CLI ≥ 2.50.0
@@ -242,7 +267,7 @@ azure-infra-base-code/
 - Azure DevOps: Project Administrator
 - Entra ID: Application Administrator (for MI creation)
 
-### Step 1: Create Managed Identity & Federated Credential
+### Step 1: Create Managed Identity & Federated Credential (Manual)
 
 ```bash
 # Set variables
@@ -283,7 +308,7 @@ az identity federated-credential create \
   --audiences "api://AzureADTokenExchange"
 ```
 
-### Step 2: Create OIDC Service Connection
+### Step 2: Create OIDC Service Connection (Manual)
 
 ```bash
 # Run the automated script
@@ -297,7 +322,7 @@ export ADO_PROJECT="ExampleCorp"
 ./create-oidc-connection-from-mi.sh
 ```
 
-### Step 3: Configure Variable Groups
+### Step 3: Configure Variable Groups (Manual)
 
 ```bash
 # Run variable group setup pipeline
@@ -313,7 +338,7 @@ This creates:
 - `vg-customer-<slug>` - Customer-specific settings
 - `vg-powerbi-gateway` - Power BI gateway settings (optional)
 
-### Step 4: Deploy Infrastructure
+### Step 4: Deploy Infrastructure (Manual)
 
 ```bash
 # Run main orchestrator pipeline
@@ -324,7 +349,7 @@ az pipelines run \
   --variables RUN_VARS_SETUP=false
 ```
 
-### Step 5: Validate Deployment
+### Step 5: Validate Deployment (Manual)
 
 ```bash
 # Run OIDC sanity check
