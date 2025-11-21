@@ -100,3 +100,6 @@ override.tf.json
 logs/
 *.log
 tmp/
+
+# Snyk Security Extension - AI Rules (auto-generated)
+.github/instructions/snyk_rules.instructions.md
